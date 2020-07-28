@@ -1,26 +1,32 @@
 {
-  "useremailaddress": "yourid@DOMAIN.com",
+  "useremailaddress": "srigajjala@expediagroup.com",
   "migrations": [
     {
       "source": {
-        "platform": "filesystem",
-        "path": "target/classes/SampleData/HelloWorld.csv",
-        "fileformat": "csv"
+        "platform": "mssql",
+        "server": "userstgdb.hahosting.local",
+        "database": "HA_User",
+        "table": "(SELECT\tTOP\t10\t*\tFROM\tdbo.Brand)A",
+        "login": "wvrgroup\\srigajjala",
+        "awsenv": "prod",
+        "vaultenv": "prod",
+        "password": "prodigy1234"
       },
       "destination": {
         "platform": "filesystem",
-        "path": "target/classes/SampleData_Json",
+        "path": "/Users/srigajjala/Desktop/test_windowsAuthenticated",
         "fileformat": "json",
-        "groupbyfields": "IntField"
+        "savemode": "Overwrite"
       }
     }
   ],
   "cluster": {
-    "pipelinename": "ekg",
-    "awsenv": "dev",
+    "pipelinename": "srini_kafka",
+    "awsenv": "test",
+    "terminateclusterafterexecution": "true",
     "portfolio": "Data Engineering Services",
     "product": "Data Engineering - COE",
-    "ec2instanceprofile": "Iam role",
-    "cronexpression": "21 * * * *"
+    "ec2instanceprofile": "ekg-loader",
+    "ComponentInfo": "e9dbb688-b8c6-4c25-8978-4161730b8a6c"
   }
 }

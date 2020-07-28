@@ -1108,39 +1108,76 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline : String) extends Serializa
 
   def manOf[T: Manifest](t: T): Manifest[T] = manifest[T]
 
-  def dataFrameToKafka(bootstrapServers: String, schemaRegistries: String, topic: String, keyField: String, Serializer: String, df: org.apache.spark.sql.DataFrame): Unit = {
+  def dataFrameToKafka(bootstrapServers: String, schemaRegistries: String, topic: String, keyField: String, keySerializer: String, Serializer: String, keySchema: String, valueSchema: String, df: org.apache.spark.sql.DataFrame): Unit = {
 
     val props = new util.HashMap[String, Object]()
 
+    var keySerializer_temp = keySerializer
+
+    if (keySerializer_temp == null) {
+      keySerializer_temp = "org.apache.kafka.common.serialization.StringSerializer"
+    }
+
+
     props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers)
     props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, Serializer)
-    props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
+    props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, keySerializer_temp)
     props.put("schema.registry.url", schemaRegistries)
 
     df.toJSON.foreachPartition((partition: Iterator[String]) => {
-      val userSchema = "{\"type\":\"record\"," +
-        "\"name\":\"dataFrame\"," +
-        "\"fields\":[{\"name\":\"body\",\"type\":\"string\"},{\"name\":\"header\",\"type\":\"string\"}]}"
+
 
       val parser = new Schema.Parser()
-      val schema = parser.parse(userSchema)
+      var keySchema_temp: String = keySchema
 
-      val producer = new KafkaProducer[Object, GenericRecord](props)
+      if (keySchema_temp == null) {
+        keySchema_temp = "{\n" +
+          "  \"type\": \"string\"\n" +
+          "}"
+      }
+
+      val valueSchema_holder = parser.parse(valueSchema)
+      //      val keySchema_holder = parser.parse(keySchema_temp)
+
+      val producer = new KafkaProducer[String, GenericRecord](props)
       val jsonParser = new JSONParser()
 
       partition.foreach((item: String) => {
         try {
           val jsonObject = jsonParser.parse(item).asInstanceOf[org.json.simple.JSONObject]
-          val key = jsonObject.get(keyField).toString()
+          val key_value = jsonObject.get(keyField).toString()
+
           val value = jsonObject.get("value").toString
+          val value_object = new JSONObject(value)
+
           val header = jsonObject.get("header").toString
-          val avroRecord = new GenericData.Record(schema)
 
-          avroRecord.put("body", value)
-          avroRecord.put("header", header)
 
-          val message = new ProducerRecord[Object, GenericRecord](topic, key, avroRecord)
-          producer.send(message)
+          import org.apache.avro.generic.GenericData
+          //          val key_record = new GenericData.Record(keySchema_holder)
+          //          key_record.put(keyField,key)
+
+          val value_record = new GenericData.Record(valueSchema_holder)
+
+          val keys_object = value_object.keys()
+          while (keys_object.hasNext()) {
+            val key_iter: String = keys_object.next().toString
+
+            if (value_object.get(key_iter).isInstanceOf[String]) {
+              println("String")
+            }
+            if (value_object.get(key_iter).isInstanceOf[Int]) {
+              println("Int")
+            }
+            if (value_object.get(key_iter).isInstanceOf[Long]) {
+              println("Long")
+            }
+
+            value_record.put(key_iter, value_object.get(key_iter))
+
+            val message = new ProducerRecord[String, GenericRecord](topic, key_value, value_record)
+            producer.send(message)
+          }
 
         } catch {
           case ex: Exception => {

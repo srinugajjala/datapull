@@ -1,30 +1,39 @@
 {
-  "useremailaddress": "yourid@DOMAIN.com",
-  "minexecutiontime":"1" ,
-  "maxexecutiontime":"10",
+  "useremailaddress": "srigajjala@expediagroup.com",
   "migrations": [
     {
       "source": {
-        "platform": "filesystem",
-        "path": "/FOLDER/SUB_FOLDER/HelloWorld.csv",
-        "fileformat": "csv"
+        "platform": "mssql",
+        "server": "notificationtestdb.wvrgroup.internal",
+        "database": "HA_Notification",
+        "login": "ekg_services",
+        "awsenv": "test",
+        "vaultenv": "test",
+        "alias": "t",
+        "table": "(SELECT\tTOP\t10\tLOWER([cs].[ConversationUUID]) as conversationUUID,\n\t\tCONVERT(VARCHAR, CONVERT(BIGINT, [cs].HomeAwayTransactionVersion)) AS [conversationEtag],\n\t\tDATEDIFF_BIG(ms, '1970-01-01 00:00:00', CONVERT(DATETIME2, [cs].[UpdateDate]) AT TIME ZONE 'Central Standard Time') AS [updated],\n\t\tDATEDIFF_BIG(ms, '1970-01-01 00:00:00', CONVERT(DATETIME2, [cs].[CreateDate]) AT TIME ZONE 'Central Standard Time') AS [created],\n\t\tNULL AS numDeliveryAttempts,\n\t\tNULL AS retried,\n\t\tNULL AS republished,\n\t\tDATEDIFF_BIG(ms, '1970-01-01 00:00:00', CONVERT(DATETIME2, GETDATE()) AT TIME ZONE 'Central Standard Time') AS [published]\nFROM\t[hsc].[ConversationStorage] AS [cs]) t",
+        "password": "!HA@Test5%"
       },
       "destination": {
-        "platform": "filesystem",
-        "path": "/FOLDER/SUB_FOLDER/SampleData_Json",
-        "fileformat": "json",
-        "groupbyfields": "IntField"
+        "platform": "kafka",
+        "bootstrapservers": "kafka-test.wvrgroup.internal:9092",
+        "schemaregistries": "http://kafka-schema-test.wvrgroup.internal:8081",
+        "topic": "datapull_test_toavro",
+        "valueserializer": "io.confluent.kafka.serializers.KafkaAvroSerializer",
+        "keyfield": "conversationUUID",
+        "valueschema": "{ \n\t\t\t\t  \"type\": \"record\",  \n\t\t\t\t  \"name\": \"ApiConversationsDataPullEvent\", \n\t\t\t\t  \"namespace\": \"com.homeaway.comms\",\n\t\t\t\t  \"doc\": \"* Schema for ApiConversationsDataPullEvent\",\n\t\t\t\t  \"fields\": [ \n\t\t\t\t    {\n\t\t\t\t      \"name\": \"conversationUUID\",  \n\t\t\t\t      \"type\": \"string\"  ,\n\t\t\t\t      \"doc\": \"* The Conversation UUID (in CoreApi format)\"\n\t\t\t\t    }  ,\n\t\t\t\t    {  \n\t\t\t\t      \"name\": \"conversationEtag\"  ,\n\t\t\t\t      \"type\": [\"null\", \"string\"]  ,\n                      \"doc\": \"* The Conversation Etag\" \n\t\t\t\t    } , \n\t\t\t\t    {  \n\t\t\t\t      \"name\": \"updated\" , \n\t\t\t\t      \"type\": [\"null\", \"long\"]  ,\n\t\t\t\t      \"doc\": \"* updated-at in milliseconds since the epoch\" , \n\t\t\t\t      \"default\": 0 \n\t\t\t\t    }  ,\n\t\t\t\t    {\n\t\t\t\t      \"name\": \"created\"  ,\n\t\t\t\t      \"type\": \"long\" , \n\t\t\t\t      \"doc\": \"* created-at in milliseconds since the epoch\"  ,\n\t\t\t\t      \"default\": 0  \n\t\t\t\t    } , \n\t\t\t\t    { \n\t\t\t\t      \"name\": \"numDeliveryAttempts\"  ,\n\t\t\t\t      \"type\": \"int\"  ,\n\t\t\t\t      \"doc\": \"* Number of delivery attempts (used by Retry Feeds)\"  ,\n\t\t\t\t      \"default\": 0 \n\t\t\t\t    }  ,\n\t\t\t\t    { \n\t\t\t\t      \"name\": \"retried\"  ,\n\t\t\t\t      \"type\": \"long\"  ,\n\t\t\t\t      \"doc\": \"* Kept as 0. To be used for the retry Kafka topic\"  ,\n\t\t\t\t      \"default\": 0\n\t\t\t\t    }  ,\n\t\t\t\t    { \n\t\t\t\t      \"name\": \"republished\"  ,\n\t\t\t\t      \"type\": \"long\"  ,\n\t\t\t\t      \"doc\": \"* Kept as 0. To be used for the retry Kafka topic\"  ,\n\t\t\t          \"default\": 0 \n\t\t\t\t    }  ,\n\t\t\t\t    { \n\t\t\t\t      \"name\": \"published\"  ,\n\t\t\t\t      \"type\": \"long\"  ,\n\t\t\t\t      \"doc\": \"* epoch ms when the event was published\"  ,\n\t\t\t\t      \"default\": 0  \n\t\t\t\t    }  \n\t\t\t\t  ]  \n\t\t\t\t}"
+      },
+      "sql": {
+        "query": "select conversationUUID, struct(conversationUUID, conversationEtag, updated, created, numDeliveryAttempts, retried, republished, published) as value, struct(unix_timestamp() as time) as header from t"
       }
     }
   ],
   "cluster": {
-    "pipelinename": "ekg",
-    "awsenv": "dev",
+    "pipelinename": "srini_kafka",
+    "awsenv": "test",
+    "terminateclusterafterexecution": "true",
     "portfolio": "Data Engineering Services",
     "product": "Data Engineering - COE",
-    "ec2instanceprofile": "Iam role",
-    "cronexpression":"21 * * * *"
+    "ec2instanceprofile": "ekg-loader",
+    "ComponentInfo": "e9dbb688-b8c6-4c25-8978-4161730b8a6c"
   }
 }
-
-
