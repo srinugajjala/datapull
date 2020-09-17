@@ -172,11 +172,13 @@ class Migration extends  SparkListener {
         destinationMap = extractCredentialsFromSecretManager(destinationMap)
       }
 
+      df.show()
+
       var dft = sparkSession.emptyDataFrame
 
       if (migration.has("sql")) {
         dft = sparkSession.sql(overrideSql)
-      }else {
+      } else {
         dft = df
       }
 
@@ -184,16 +186,16 @@ class Migration extends  SparkListener {
         dft.persist()
         processedTableCount_precise = dft.count()
       }
-
+      dft.show(false)
+      dft.printSchema()
       val dataframeFromTo = new DataFrameFromTo(appConfig, pipeline)
 
       if (destinationMap("platform") == "cassandra") {
         destinationMap = destinationMap ++ deriveClusterIPFromConsul(destinationMap)
-        dataframeFromTo.dataFrameToCassandra(destinationMap("awsenv"), destinationMap("cluster"), destinationMap("keyspace"), destinationMap("table"), destinationMap("login"), destinationMap("password"), destinationMap("local_dc"), destination.optJSONObject("sparkoptions"), dft, reportRowHtml, destinationMap("vaultenv"),destinationMap.getOrElse("secretstore","vault"))
+        dataframeFromTo.dataFrameToCassandra(destinationMap("awsenv"), destinationMap("cluster"), destinationMap("keyspace"), destinationMap("table"), destinationMap("login"), destinationMap("password"), destinationMap("local_dc"), destination.optJSONObject("sparkoptions"), dft, reportRowHtml, destinationMap("vaultenv"), destinationMap.getOrElse("secretstore", "vault"))
       }
-      else if(destinationMap("platform") == "Email")
-      {
-        dataframeFromTo.dataFrameToEmail(destinationMap.getOrElse("to",reportEmailAddress),destinationMap.getOrElse("subject","Datapull Result"),dft,destinationMap.getOrElse("limit","100"),destinationMap.getOrElse("truncate","100"))
+      else if (destinationMap("platform") == "Email") {
+        dataframeFromTo.dataFrameToEmail(destinationMap.getOrElse("to", reportEmailAddress), destinationMap.getOrElse("subject", "Datapull Result"), dft, destinationMap.getOrElse("limit", "100"), destinationMap.getOrElse("truncate", "100"))
       }
       else if (destinationMap("platform") == "mssql" || destinationMap("platform") == "mysql" || destinationMap("platform") == "postgres" || destinationMap("platform") == "oracle" || destinationMap("platform") == "teradata") {
         dataframeFromTo.dataFrameToRdbms(destinationMap("platform"), destinationMap("awsenv"), destinationMap("server"), destinationMap("database"), destinationMap("table"), destinationMap("login"), destinationMap("password"), dft, destinationMap("vaultenv"), destinationMap.getOrElse("secretstore", "vault"), destinationMap.getOrElse("sslenabled", "false"), destinationMap.getOrElse("vault", null), destination.optJSONObject("jdbcoptions"),destinationMap.getOrElse("savemode", "Append"))

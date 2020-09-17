@@ -4,19 +4,26 @@
     {
       "source": {
         "platform": "mssql",
-        "server": "userstgdb.hahosting.local",
-        "database": "HA_User",
-        "table": "(SELECT\tTOP\t10\t*\tFROM\tdbo.Brand)A",
-        "login": "wvrgroup\\srigajjala",
-        "awsenv": "prod",
-        "vaultenv": "prod",
-        "password": "prodigy1234"
+        "server": "notificationtestdb.wvrgroup.internal",
+        "database": "HA_Notification",
+        "login": "ekg_services",
+        "awsenv": "test",
+        "vaultenv": "test",
+        "alias": "t",
+        "table": "(SELECT\tTOP\t10\tLOWER([cs].[ConversationUUID]) as conversationUUID,\n\t\tCONVERT(VARCHAR, CONVERT(BIGINT, [cs].HomeAwayTransactionVersion)) AS [conversationEtag],\n\t\tDATEDIFF_BIG(ms, '1970-01-01 00:00:00', CONVERT(DATETIME2, [cs].[UpdateDate]) AT TIME ZONE 'Central Standard Time') AS [updated],\n\t\tDATEDIFF_BIG(ms, '1970-01-01 00:00:00', CONVERT(DATETIME2, [cs].[CreateDate]) AT TIME ZONE 'Central Standard Time') AS [created],\n\t\tNULL AS numDeliveryAttempts,\n\t\tNULL AS retried,\n\t\tNULL AS republished,\n\t\tDATEDIFF_BIG(ms, '1970-01-01 00:00:00', CONVERT(DATETIME2, GETDATE()) AT TIME ZONE 'Central Standard Time') AS [published]\nFROM\t[hsc].[ConversationStorage] AS [cs]) t",
+        "password": "!HA@Test5%"
       },
       "destination": {
-        "platform": "filesystem",
-        "path": "/Users/srigajjala/Desktop/test_windowsAuthenticated",
-        "fileformat": "json",
-        "savemode": "Overwrite"
+        "platform": "kafka",
+        "bootstrapservers": "kafka-test.wvrgroup.internal:9092",
+        "schemaregistries": "http://kafka-schema-test.wvrgroup.internal:8081",
+        "topic": "datapull_apievents",
+        "valueserializer": "io.confluent.kafka.serializers.KafkaAvroSerializer",
+        "keyfield": "conversationUUID",
+        "valueschema": "{ \n\t\t\t\t  \"type\": \"record\",  \n\t\t\t\t  \"name\": \"ApiConversationsDataPullEvent\", \n\t\t\t\t  \"namespace\": \"com.homeaway.comms\",\n\t\t\t\t  \"doc\": \"* Schema for ApiConversationsDataPullEvent\",\n\t\t\t\t  \"fields\": [ \n\t\t\t\t    {\n\t\t\t\t      \"name\": \"conversationUUID\",  \n\t\t\t\t      \"type\": \"string\"  ,\n\t\t\t\t      \"doc\": \"* The Conversation UUID (in CoreApi format)\"\n\t\t\t\t    }  ,\n\t\t\t\t    {  \n\t\t\t\t      \"name\": \"conversationEtag\"  ,\n\t\t\t\t      \"type\": [\"null\", \"string\"]  ,\n                      \"doc\": \"* The Conversation Etag\" \n\t\t\t\t    } , \n\t\t\t\t    {  \n\t\t\t\t      \"name\": \"updated\" , \n\t\t\t\t      \"type\": [\"null\", \"long\"]  ,\n\t\t\t\t      \"doc\": \"* updated-at in milliseconds since the epoch\" , \n\t\t\t\t      \"default\": 0 \n\t\t\t\t    }  ,\n\t\t\t\t    {\n\t\t\t\t      \"name\": \"created\"  ,\n\t\t\t\t      \"type\": \"long\" , \n\t\t\t\t      \"doc\": \"* created-at in milliseconds since the epoch\"  ,\n\t\t\t\t      \"default\": 0  \n\t\t\t\t    } , \n\t\t\t\t    { \n\t\t\t\t      \"name\": \"numDeliveryAttempts\"  ,\n\t\t\t\t      \"type\": \"int\"  ,\n\t\t\t\t      \"doc\": \"* Number of delivery attempts (used by Retry Feeds)\"  ,\n\t\t\t\t      \"default\": 0 \n\t\t\t\t    }  ,\n\t\t\t\t    { \n\t\t\t\t      \"name\": \"retried\"  ,\n\t\t\t\t      \"type\": \"long\"  ,\n\t\t\t\t      \"doc\": \"* Kept as 0. To be used for the retry Kafka topic\"  ,\n\t\t\t\t      \"default\": 0\n\t\t\t\t    }  ,\n\t\t\t\t    { \n\t\t\t\t      \"name\": \"republished\"  ,\n\t\t\t\t      \"type\": \"long\"  ,\n\t\t\t\t      \"doc\": \"* Kept as 0. To be used for the retry Kafka topic\"  ,\n\t\t\t          \"default\": 0 \n\t\t\t\t    }  ,\n\t\t\t\t    { \n\t\t\t\t      \"name\": \"published\"  ,\n\t\t\t\t      \"type\": \"long\"  ,\n\t\t\t\t      \"doc\": \"* epoch ms when the event was published\"  ,\n\t\t\t\t      \"default\": 0  \n\t\t\t\t    }  \n\t\t\t\t  ]  \n\t\t\t\t}"
+      },
+      "sql": {
+        "query": "select conversationUUID, struct(conversationUUID, conversationEtag, updated, created,cast(CASE WHEN numDeliveryAttempts is null THEN 0 ELSE numDeliveryAttempts END as numDeliveryAttempts as long) numDeliveryAttempts,CASE WHEN retried is null THEN 0 ELSE retried END as retried,CASE WHEN republished is NULL THEN 0 ELSE republished END as republished, published) as value, struct(unix_timestamp() as time) as header from t"
       }
     }
   ],
