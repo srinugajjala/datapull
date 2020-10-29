@@ -1126,7 +1126,6 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline : String) extends Serializa
 
     df.toJSON.foreachPartition((partition: Iterator[String]) => {
 
-
       val parser = new Schema.Parser()
       var keySchema_temp: String = keySchema
 
@@ -1158,25 +1157,13 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline : String) extends Serializa
           //          key_record.put(keyField,key)
 
           val value_record = new GenericData.Record(valueSchema_holder)
-          val keys_object = value_object.keys()
-          while (keys_object.hasNext()) {
-            val key_iter: String = keys_object.next().toString
-
-            //            if (value_object.get(key_iter).isInstanceOf[String]) {
-            //              println("String")
-            //            }
-            //            if (value_object.get(key_iter).isInstanceOf[Int]) {
-            //              println("Int")
-            //            }
-            //            if (value_object.get(key_iter).isInstanceOf[Long]) {
-            //              println("Long")
-            //            }
-            println(key_iter)
+          val keys_value_object = value_object.keys()
+          while (keys_value_object.hasNext()) {
+            val key_iter: String = keys_value_object.next().toString
             value_record.put(key_iter, value_object.get(key_iter))
-
-
           }
           val message = new ProducerRecord[String, GenericRecord](topic, key_value, value_record)
+
           producer.send(message)
 
 
