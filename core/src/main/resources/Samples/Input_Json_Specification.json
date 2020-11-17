@@ -4,9 +4,9 @@
   "useremailaddress": "YOUR_ID@DOMAIN.com",
   "comment_precisecounts": "optional. If provided true, then we persist the dataframe to provide the accurate counts which will add additional time for the datapull",
   "precisecounts": false,
-  "migration_failure_threshold":"1",
-  "comment_failure_threshold":"Number of acceptable failures in a given set of migrations",
-  "comment_jsoninputfile": "optional. The EMR API rejects JSON inputs that are too long. In that event (and/or to maintain versioned inputs) you can provide this JSON as a .json file uploaded in S3, using this element",	
+  "migration_failure_threshold": "1",
+  "comment_failure_threshold": "Number of acceptable failures in a given set of migrations",
+  "comment_jsoninputfile": "optional. The EMR API rejects JSON inputs that are too long. In that event (and/or to maintain versioned inputs) you can provide this JSON as a .json file uploaded in S3, using this element",
   "jsoninputfile": {
     "s3path": "bucketname/folder/input.json",
     "comment_awsaccesskeyid": "optional, if EMR runs in same environment as S3. Please replace this expired id with your own.",
@@ -28,7 +28,7 @@
       "source_file": {
         "platform": "filesystem",
         "path": "/FOLDER/SUB_FOLDER/",
-        "comment_fileformat": "Supported formats are parquet, json, csv,tsv",
+        "comment_fileformat": "Supported formats are parquet,json,csv,orc,avro. Tab-delimited files can be read by cboosing the fileformat as csv and setting the delimiter to \t",
         "fileformat": "parquet",
         "comment_groupbyfields": "optional. Applies only to destinations. If specified, the records are group in nested subfolders named field1=value etc",
         "groupbyfields": "field1,field2",
@@ -40,7 +40,7 @@
       "source_s3": {
         "platform": "s3",
         "s3path": "BUCKET_NAME/FOLDER_PATH",
-        "comment_fileformat": "Supported formats are parquet, json, csv. Tab-delimited files can be read by cboosing the fileformat as csv and setting the delimiter to \t",
+        "comment_fileformat": "Supported formats are parquet,json,csv,orc,avro. Tab-delimited files can be read by cboosing the fileformat as csv and setting the delimiter to \t",
         "fileformat": "parquet",
         "comment_groupbyfields": "optional. Applies only to destinations. If specified, the records are group in nested subfolders named field1=value etc",
         "groupbyfields": "field1,field2",
@@ -54,6 +54,10 @@
         "delimiter": "\t",
         "comment_mergeschema": "Optional, this is to merge different schemas when reading parquet files. the default value for this is false",
         "mergeschema": false,
+        "comment_coalescefilecount": "Optional, Specify the number of partitions, which determine the number of files in the destination folder. Applies only to destinations, not sources",
+        "coalescefilecount": null,
+        "comment_enable_server_side_encryption": "Optional, to access the buckets which have server side encryption enabled with AES 256 to be set true. Default: false",
+        "enable_server_side_encryption": "false",
         "comment_post_migrate_command": "This is to execute copy/delete operation after the desired migration to s3",
         "post_migrate_command": {
           "comment_operation": "This field will take options either copy/delete.",
@@ -174,21 +178,25 @@
         },
         "comment_sslenabled": "optional, this option is currently supported for postgres",
         "sslenabled": false,
-        "comment_primarykey":" The fields primarykey, lowerbound, upperbound, numPartitions are optional. Setting these fields allows Data Pull to read the rdbms source table/data as parallel partitions. This approach allows smaller table scans but using more connections. Please go through the following link to use these fields : https://spark.apache.org/docs/latest/sql-programming-guide.html#jdbc-to-other-databases",
+        "comment_primarykey": " The fields primarykey, lowerbound, upperbound, numPartitions are optional. Setting these fields allows Data Pull to read the rdbms source table/data as parallel partitions. This approach allows smaller table scans but using more connections. Please go through the following link to use these fields : https://spark.apache.org/docs/latest/sql-programming-guide.html#jdbc-to-other-databases",
         "primarykey": "ID",
         "lowerBound": "1",
         "upperBound": "100",
-        "numPartitions": "10"
+        "numPartitions": "10",
+        "comment_iswindowsauthenticated": "Optional, this option is to be used when the users wants to use windows authentication instead of sql authentication",
+        "iswindowsauthenticated": "false",
+        "comment_domain": "Optional, the domain group of the org you wants to connect when using windows authentication",
+        "domain": "null"
       },
       "destination_elastic": {
         "platform": "elastic",
         "clustername": "IP_ADDR_OR_DNS_NAME",
         "port": "9201",
         "index": "Name of Index, equivalent of database",
-        "comment_savemode":"Optional, the default value is upsert and please check here more information on this 'https://www.elastic.co/guide/en/elasticsearch/hadoop/current/configuration.html#_operation': ",
+        "comment_savemode": "Optional, the default value is upsert and please check here more information on this 'https://www.elastic.co/guide/en/elasticsearch/hadoop/current/configuration.html#_operation': ",
         "savemode": "upsert",
         "mappingid": "Optional:Any unique field of your data",
-        "type": "type of index,equivalent of table",
+        "type": "type of index,equivalent of table.",
         "version": "Version of your ES",
         "login": "LOGIN_NAME",
         "password": "PASSWORD",
@@ -197,8 +205,7 @@
           {
             "shell": "curl -XDELETE http://IP_ADDR_OR_DNS_NAME:PORT/INDEX_NAME"
           }
-        ]
-      ,
+        ],
         "comment_pre_migrate_command": "This is to execute shell commands ie mainly curl commands for elastic search",
         "pre_migrate_commands": [
           {
@@ -206,19 +213,42 @@
           }
         ]
       },
-      "source_kafka":{
-        "platform" : "kafka",
-        "comment_bootstrapservers":"this is for bootstrap information of the kafka cluster",
+      "source_kafka": {
+        "platform": "kafka",
+        "comment_bootstrapservers": "this is for bootstrap information of the kafka cluster",
         "bootstrapServers": "KAFKA_BOOTSTRAP_SERVER:9092",
         "schemaRegistries": "http://KAFKA_SCHEMA_REGISTRY:8081",
         "topic": "TOPIC_NAME",
-        "offset":"earliest",
-        "comment_deserializer":"currenlty we are supporting the below mentioned deserializer but we are happy to support other ones if required.",
+        "offset": "earliest",
+        "comment_deserializer": "currenlty we are supporting the below mentioned deserializer but we are happy to support other ones if required.",
         "deSerializer": "org.apache.kafka.common.serialization.Deserializer",
         "comment_s3location": "we stage s3 data in a s3 location as we poll the topic many times. giving a location in the same env as the kafka topic is required and we append two UUID's(we have migration id and job id for each run, so we will appending these two UUID's at the end of the s3location to the user input)",
         "s3location": "s3a://BUCKET_NAME/FOLDER_PATH",
-        "comment_groupid":"Optional, using this option will read the data where you are left off in the previous run with the same group id",
-        "groupid": "KAFKA_GROUPID"
+        "comment_groupid": "Optional, using this option will read the data where you are left off in the previous run with the same group id",
+        "groupid": "KAFKA_GROUPID",
+        "comment_requiredonlyvalue": "Optional, by default we will read both the key and value objects. if you want to get the only value then keep this option to true",
+        "requiredonlyvalue": "false",
+        "comment_": "this is the name of the payload column for the topic. for eg, value, body etc. default value for this option is `body` and this option only will have an effect when you have the option `requiredonlyvalue` to true",
+        "payloadcolumnname": "body",
+        "Comment_keyField": "this is the key to be set for the message from dataset",
+        "keyField": "some_keyfield",
+        "comment_keyFormat": "Optional, you can set the serializer type for the key between string and avro, Default: string",
+        "keyFormat": "string",
+        "comment_valuefield": "Optional, if the value field has to be derived from a column from the dataset else whole row will be treated as the payload",
+        "valuefield": "null",
+        "comment_headerfield": "Optional, if you want to set header field from a column in the dataset else we add timestamp column as headers field. Please note that it should be of the struct type if it's being build in sql",
+        "headerfield": "null"
+      },
+      "destination": {
+        "platform": "kafka",
+        "comment_bootstrapservers": "this is for bootstrap information of the kafka cluster",
+        "bootstrapServers": "KAFKA_BOOTSTRAP_SERVER:9092",
+        "schemaRegistries": "http://KAFKA_SCHEMA_REGISTRY:8081",
+        "topic": "TOPIC_NAME",
+        "comment_keyField": "required, field in the dataset that should be used as the kafka topic's key field",
+        "keyField": "some_keyfield",
+        "comment_keyFormat": "Optional, by default will be string. If set to avro, the key field will be converted to avro and the schema will be registered in schema registry",
+        "keyFormat": "string"
       },
       "source_influxdb": {
         "platform": "influxdb",
@@ -233,24 +263,30 @@
         "comment_vaultenv": "optional. Possible values are dev/test/stage/prod. Required if Vault integration is used to fetch the credentials"
       },
       "destination_influxDB": {
-      "platform": "influxdb",
-      "comment_awsenv": "optional. Possible values are dev/test/stage/prod. Required if Vault integration is used to fetch the credentials",
-      "awsenv": "dev",
-      "comment_cluster": "This element accepts both IPs and Consul DNS names. Consul DNS names are required if Vault integration is used to fetch the credentials",
+        "platform": "influxdb",
+        "comment_awsenv": "optional. Possible values are dev/test/stage/prod. Required if Vault integration is used to fetch the credentials",
+        "awsenv": "dev",
+        "comment_cluster": "This element accepts both IPs and Consul DNS names. Consul DNS names are required if Vault integration is used to fetch the credentials",
         "cluster": "IP_ADDR_OR_DNS_NAME",
         "database": "DATABASE_NAME",
-      "comment_measurement":"destination measurement .This accept measurement field name/column .Only one column can be selected for measurements.If measurement is empty then provide the provide the measurment in the SQl query ",
-      "measurement": "measurement field name",
-      "comment_tags":"This is optional comma separated column name in destination table/measurement",
-      "tags":[ "tag1","tag2"],
-      "comment_fields":"comma separated column name in destination table/measurement.At least one field is required",
-      "fields":[ "field1","field2"],
+        "comment_measurement": "destination measurement .This accept measurement field name/column .Only one column can be selected for measurements.If measurement is empty then provide the provide the measurment in the SQl query ",
+        "measurement": "measurement field name",
+        "comment_tags": "This is optional comma separated column name in destination table/measurement",
+        "tags": [
+          "tag1",
+          "tag2"
+        ],
+        "comment_fields": "comma separated column name in destination table/measurement.At least one field is required",
+        "fields": [
+          "field1",
+          "field2"
+        ],
         "login": "LOGIN_NAME",
-      "comment_password": "optional. Required if Vault integration is not used",
+        "comment_password": "optional. Required if Vault integration is not used",
         "password": "PASSWORD",
-      "comment_vaultenv":"optional. Possible values are dev/test/stage/prod. Required if Vault integration is used to fetch the credentials",
-      "vaultenv":"dev"
-    },
+        "comment_vaultenv": "optional. Possible values are dev/test/stage/prod. Required if Vault integration is used to fetch the credentials",
+        "vaultenv": "dev"
+      },
       "source_mongodb": {
         "platform": "mongodb",
         "comment_awsenv": "optional. Possible values are dev/test/stage/prod. Required if Vault integration is used to fetch the credentials",
@@ -266,13 +302,17 @@
         "login": "LOGIN_NAME",
         "comment_password": "optional. Required if Vault integration is not used",
         "password": "PASSWORD",
-        "comment_overrideconnector":"Optional;Default value: false. use this flag to have DataPull read each MongoDB Document as a whole JSON into a field called jsonfield in the resultset. This is the recommended approach when reading MongoDB collections that have documents that do not conform to a single schema.",
-        "overrideconnector":false,
-        "comment_sparkoptions":"Optional, this is to enable users to use mongo specific configurations. all options can be found at the official spark mongo documentation: https://docs.mongodb.com/spark-connector/master/configuration/",
-        "sparkoptions":{
-          "replaceDocument":true,
-          "ordered":false,
-          "readPreference.name":"Primary"
+        "comment_overrideconnector": "Optional;Default value: false. use this flag to have DataPull read each MongoDB Document as a whole JSON into a field called jsonfield in the resultset. This is the recommended approach when reading MongoDB collections that have documents that do not conform to a single schema.",
+        "overrideconnector": false,
+        "comment_tmpfilelocation": "this is required when the oveerideconnector option is enabled to store the temp data while reading data from mongo. it can be a s3 location nor any random location in the spark nodes",
+        "tmpfilelocation": "S3_LOCATION_OR_ANY_RANDOM_DIRECTORY",
+        "comment_samplesize": "Optional, this is to set sampling of the mongo driver to fetch the schema for a collection.The default value for this 1000. this can be used if we have varying schemas but not varying data types for a single field",
+        "samplesize": "1000",
+        "comment_sparkoptions": "Optional, this is to enable users to use mongo specific configurations. all options can be found at the official spark mongo documentation: https://docs.mongodb.com/spark-connector/master/configuration/",
+        "sparkoptions": {
+          "replaceDocument": true,
+          "ordered": false,
+          "readPreference.name": "Primary"
         },
         "cpmment_pre_migrate_command": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
         "pre_migrate_command": "{ delete: \"datapull_test\",deletes: [ { q: { user: \"abc123\" }, limit: 1 } ] }",
@@ -300,16 +340,22 @@
         "password": "PASSWORD",
         "comment_documentfromjsonfield": "Optional; default value is false. If set to true, the value of the field in the source dataset identified by the \"jsonfield\" attribute, is treated as a full json document and is written to Mongodb. All the remaining fields in the source dataset are ignored. This is useful for data sources like MSSQL that can produce JSON documents; this is also useful when moving sources like MongoDB, S3 etc that can have multiple schemas within a single collection/folder.",
         "documentfromjsonfield": false,
-        "comment_jsonfield":"Optional, this is the column in which the whole document is stored as a json string and please note that if you are migrating it from mongo to mongo with multi schema(I.e when you use overrideconnector option) then we save the column as jsonfield so we need not to add this option to the json",
-        "jsonfield":"jsonfield",
+        "comment_jsonfield": "Optional, this is the column in which the whole document is stored as a json string and please note that if you are migrating it from mongo to mongo with multi schema(I.e when you use overrideconnector option) then we save the column as jsonfield so we need not to add this option to the json",
+        "jsonfield": "jsonfield",
         "comment_replacedocuments": "Optional, this is true by default",
         "replacedocuments": true,
-        "comment_sparkoptions":"Optional, this is to enable users to use mongo specific configurations. all options can be found at the official spark mongo documentation: https://docs.mongodb.com/spark-connector/master/configuration/",
-        "sparkoptions":{
-          "replaceDocument":true,
-          "ordered":false,
-          "readPreference.name":"Primary"
+        "comment_sparkoptions": "Optional, this is to enable users to use mongo specific configurations. all options can be found at the official spark mongo documentation: https://docs.mongodb.com/spark-connector/master/configuration/",
+        "sparkoptions": {
+          "replaceDocument": true,
+          "ordered": false,
+          "readPreference.name": "Primary"
         },
+        "comment_secret_store": "Optional, this should be used if the secret has to be retrieved from secretmanager. Accepatble value is aws_secrets_manager",
+        "secret_store": "aws_secrets_manager",
+        "comment_secret_name": "if the aws_secrets_manager as selected as secret_store then this field should be used to provide the secret name",
+        "secret_name": "AWS_SECRET_NAME",
+        "comment_secret_key_name": "Optional. The secret stored in Secrets Manager corresponding to a secret name, has a max size of 10 kb. If the secret is a JSON string (which is usually the case) or a binary map, then the secret_key_name specifies which JSON attribute/map key to use as the secret. If the secret_key_name is not specified then the whole string is used as the secret.",
+        "secret_key_name": null,
         "cpmment_pre_migrate_command": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
         "pre_migrate_command": "{ delete: \"datapull_test\",deletes: [ { q: { user: \"abc123\" }, limit: 1 } ] }",
         "cpmment_post_migrate_commands": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
@@ -342,7 +388,7 @@
           "comment_createormerge": "Optional, defaults to MERGE. Can either be CREATE or MERGE, and denotes whether Neo4j does a CREATE (insert, possibly leading to duplicates, but very fast) or a MERGE (upsert, no duplicates but slower) operation",
           "createormerge": "MERGE",
           "comment_createnodekeyconstraint": "Optional, defaults to true. If true, Data Pull creates a node key constraint for all the key properties of the node",
-          "createnodekeyconstraint" : true
+          "createnodekeyconstraint": true
         },
         "comment_node2": "Optional. Information about the second (of possible two) classes of nodes to be upserted.",
         "node2": {
@@ -360,6 +406,37 @@
         },
         "login": "appuser",
         "password": "appuser"
+      },
+      "destination_snowflake": {
+        "platform": "snowflake",
+        "comment_url": "Specifies the hostname for your account in the following format: account_name.snowflakecomputing.com . However, note that your full account name might include additional segments that identify the region and cloud platform where your account is hosted.",
+        "url": "youraccountnumber.awsregion.snowflakecomputing.com",
+        "user": "snowflakeuser",
+        "password": "password",
+        "database": "snowflake database name",
+        "schema": "schema in datbase",
+        "comment_table": "Table to read/write. When used as a source platform, one can also specify a SQL query that evaluates to a view e.g (SELECT * FROM testtable1) A",
+        "table": "testtable1",
+        "comment_savemode": "Optional, This should be one of the Append/Overwrite/ErrorIfExists",
+        "savemode": "Overwrite",
+        "comment_options": "Specify configuation options (including session options) for the connector, ref https://docs.snowflake.com/en/user-guide/spark-connector-use.html#setting-configuration-options-for-the-connector . Note that these options will take precedence over url, user, etc. if they overlap. For example, if you specify sfSchema in this section, it will take precedence over schema in parent JSON object",
+        "options": {
+          "postactions": "DROP SCHEMA \"DEMO_DB\".\"TESTSCHEMA1\";"
+        }
+      },
+      "destination_sftp": {
+        "platform": "sftp",
+        "host": "htp hostname/IP address",
+        "path": "somepath/somefilename.json",
+        "login": "ftpusername",
+        "comment_password": "Optional; password for ftpusername. This attribute is optional/ignored if the pemfilepath attribute is specified.",
+        "password": "ftppassword",
+        "comment_pemfilepath": "Optional; local file path for the PEM RSA private key file for ftpusername. This attribute is not needed if the password attribute is specified. The password attribute is optional/ignored if the pemfilepath attribute is specified. When running on EMR, the jksfilepath should be specified as the S3 location of the PEM file in the format s3://<S3 bucket and folder path>/<PEM file name>, and the pemfilepath should be of the format /mnt/bootstrapfiles/<PEM file name>",
+        "pemfilepath": "/mnt/bootstrapfiles/<PEM file name>",
+        "comment_jksfilepath": "Optional; When running on EMR, the jksfilepath should be specified as the S3 location of the PEM file in the format s3://<S3 bucket and folder path>/<PEM file name>, and the pemfilepath should be of the format /mnt/bootstrapfiles/<PEM file name>",
+        "jksfilepath": "s3://<S3 bucket and folder path>/<PEM file name>",
+        "comment_fileformat": "Supported formats are parquet,json,csv,orc,avro. Tab-delimited files can be read by cboosing the fileformat as csv and setting the delimiter to \t",
+        "fileformat": "json"
       }
     }
   ],
@@ -377,10 +454,18 @@
     "comment_ec2instanceprofile": "The role with whioch the emr cluster(ec2-instances) has to be spun up so that they can access vault.",
     "ec2instanceprofile": "my-loader",
     "comment_componentinfo": "Dominion enforced UUID tag. ",
-    "ComponentInfo":"00000000-0000-0000-0000-000000000000",
+    "ComponentInfo": "00000000-0000-0000-0000-000000000000",
     "comment_cronexpression": "optional,this element will be used for scheduling the job and it will be defaulted for single run",
     "cronexpression": "21 * * * *",
-    "comment_sparksubmitparams":"optional, this option will give the ability to add the users to add the spark submit options for your use case",
-    "sparksubmitparams": "--conf spark.driver.memory=10g --deploy-mode cluster --class DataMigrationFramework s3://BUCKET_NAME/FOLDER_PATH/DataMigrationFramework-1.0-SNAPSHOT-jar-with-dependencies_test.jar"
+    "comment_master_instance_type": "optional, Type of EC2 instance to use for the master node of the EMR cluster. Default value: m4.large",
+    "master_instance_type": "m4.large",
+    "comment_slave_instance_type": "optional, Type of EC2 instance to use for the slave node(s) of the EMR cluster. Default value: m4.large",
+    "slave_instance_type": "m4.large",
+    "comment_NodeCount": "optional; Number of nodes, the number of slave nodes will be NodeCount -1. Default: 6",
+    "NodeCount": 6,
+    "comment_sparksubmitparams": "optional, this option will give the ability to add the users to add the spark submit options for your use case",
+    "sparksubmitparams": "--conf spark.driver.memory=10g --deploy-mode cluster --class DataMigrationFramework s3://BUCKET_NAME/FOLDER_PATH/DataMigrationFramework-1.0-SNAPSHOT-jar-with-dependencies_test.jar",
+    "comment_emr_service_role": "optional, thsi option should be used set the emr service role. Default: emr_datapull_role",
+    "emr_service_role": "emr_datapull_role"
   }
 }

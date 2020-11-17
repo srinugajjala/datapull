@@ -9,9 +9,8 @@
       },
       "destination": {
         "platform": "filesystem",
-        "path": "target/classes/SampleData_Json",
-        "fileformat": "json",
-        "groupbyfields": "IntField"
+        "path": "target/classes/SampleData_Avro2",
+        "fileformat": "avro"
       }
     }
   ],
@@ -20,7 +19,6 @@
     "awsenv": "dev",
     "portfolio": "Data Engineering Services",
     "product": "Data Engineering - COE",
-    "ec2instanceprofile": "Iam role",
-    "cronexpression": "21 * * * *"
+    "ec2instanceprofile": "Iam role"
   }
 }

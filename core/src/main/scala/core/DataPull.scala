@@ -20,7 +20,6 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.time._
 import java.util.{Scanner, UUID}
-import javax.net.ssl._
 
 import com.datastax.driver.core.utils.UUIDs
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -28,6 +27,7 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.mongodb.spark.sql.fieldTypes.Binary
 import config.AppConfig
 import helper._
+import javax.net.ssl._
 import logging._
 import org.apache.commons.codec.binary.{Base64, Hex}
 import org.apache.spark.sql.SparkSession
@@ -123,7 +123,13 @@ object DataPull {
         .config("" + config.broadcasttimeout, "" + config.btimeout)
         .config("" + config.executor, config.interval)
         .config("" + config.failures, no_of_retries)
+        .config("fs.s3a.multiobjectdelete.enable", true)
+        .config("spark.sql.hive.metastore.version", "1.2.1")
+        .config("spark.sql.hive.metastore.jars", "builtin")
+        .config("spark.sql.hive.caseSensitiveInferenceMode", "INFER_ONLY")
+        .enableHiveSupport()
         .getOrCreate()
+
 
       val helper = new Helper(config)
       ec2Role = helper.GetEC2Role()
@@ -281,13 +287,29 @@ object DataPull {
   def setAWSCredentials(sparkSession: org.apache.spark.sql.SparkSession, sourceDestinationMap: Map[String, String]): Unit = {
     //sparkSession.sparkContext.hadoopConfiguration.set("fs.s3.impl", "com.amazon.ws.emr.hadoop.fs.EmrFileSystem")
     if (sourceDestinationMap("awssecretaccesskey") != "") {
-      sparkSession.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", sourceDestinationMap("awsaccesskeyid"))
-      sparkSession.sparkContext.hadoopConfiguration.set("fs.s3a.secret.key", sourceDestinationMap("awssecretaccesskey"))
+      sparkSession.sparkContext.hadoopConfiguration.set("fs.s3.access.key", sourceDestinationMap("awsaccesskeyid"))
+      sparkSession.sparkContext.hadoopConfiguration.set("fs.s3.secret.key", sourceDestinationMap("awssecretaccesskey"))
     }
+    if ((sourceDestinationMap.contains("enableServerSideEncryption") && sourceDestinationMap("enableServerSideEncryption") == "true") || (sourceDestinationMap.contains("enable_server_side_encryption") && sourceDestinationMap("enable_server_side_encryption")  == "true"))
+    {
+      sparkSession.sparkContext.hadoopConfiguration.set("fs.s3.enableServerSideEncryption", "true")
+      sparkSession.sparkContext.hadoopConfiguration.set("fs.s3.serverSideEncryptionAlgorithm", "AES256")
+      sparkSession.sparkContext.hadoopConfiguration.set("fs.s3.connection.ssl.enabled", "true")
+    } 
   }
 
   def jsonObjectPropertiesToMap(properties: List[String], jsonObject: JSONObject): Map[String, String] = {
     properties map (property => property -> (if (jsonObject.has(property)) jsonObject.getString(property) else "")) toMap
+  }
+
+  def jsonArrayPropertiesToList(jsonStringArr: String) = {
+    var returnList = List.empty[String]
+    val jsonArray = new JSONArray(jsonStringArr)
+    val length = jsonArray.length()
+    for( i <- 0 to length-1){
+      returnList = returnList :+ jsonArray.get(i).toString()
+    }
+    returnList
   }
 
   def uuid(): String = {

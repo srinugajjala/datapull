@@ -142,7 +142,7 @@ public class DataPullTask implements Runnable {
         else{
             runExampleConfig = new HadoopJarStepConfig()
                     .withJar("command-runner.jar")
-                    .withArgs("spark-submit", "--class", DataPullTask.MAIN_CLASS, jarPath, String.format(DataPullTask.JSON_WITH_INPUT_FILE_PATH, this.jsonS3Path));
+                    .withArgs("spark-submit", "--packages", "org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.4,org.apache.spark:spark-avro_2.11:2.4.4", "--class", DataPullTask.MAIN_CLASS, jarPath, String.format(DataPullTask.JSON_WITH_INPUT_FILE_PATH, this.jsonS3Path));
         }
         final StepConfig customExampleStep = new StepConfig()
                 .withName(this.taskId)
@@ -196,13 +196,21 @@ public class DataPullTask implements Runnable {
         final String serviceRole = emrProperties.getServiceRole();
         final String jobFlowRole = emrProperties.getJobFlowRole();
 
+
+/*        Map<String, String> emrfsProperties = new HashMap<String, String>();
+        emrfsProperties.put("fs.s3.enableServerSideEncryption", "true");
+
+        Configuration myEmrfsConfig = new Configuration()
+                .withClassification("emrfs-site")
+                .withProperties(emrfsProperties);*/
+
         final RunJobFlowRequest request = new RunJobFlowRequest()
                 .withName(this.taskId)
                 .withReleaseLabel(Objects.toString(this.clusterProperties.getEmrReleaseVersion(), emrReleaseVersion))
                 .withSteps(customExampleStep)
                 .withApplications(spark)
                 .withLogUri(logPath)
-                .withServiceRole(serviceRole)
+                .withServiceRole(Objects.toString(this.clusterProperties.getEmrServiceRole(), serviceRole))
                 .withJobFlowRole(Objects.toString(this.clusterProperties.getInstanceProfile(), jobFlowRole))  //addAdditionalInfoEntry("maximizeResourceAllocation", "true")
                 .withVisibleToAllUsers(true)
                 .withTags(this.emrTags.values()).withConfigurations(new Configuration().withClassification("spark").withProperties(sparkProperties))
@@ -238,7 +246,7 @@ public class DataPullTask implements Runnable {
         else{
             runExampleConfig = new HadoopJarStepConfig()
                     .withJar("command-runner.jar")
-                    .withArgs("spark-submit", "--class", DataPullTask.MAIN_CLASS, jarPath, String.format(DataPullTask.JSON_WITH_INPUT_FILE_PATH, this.jsonS3Path));
+                    .withArgs("spark-submit", "--packages", "org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.4,org.apache.spark:spark-avro_2.11:2.4.4", "--class", DataPullTask.MAIN_CLASS, jarPath, String.format(DataPullTask.JSON_WITH_INPUT_FILE_PATH, this.jsonS3Path));
         }
 
         final StepConfig step = new StepConfig()

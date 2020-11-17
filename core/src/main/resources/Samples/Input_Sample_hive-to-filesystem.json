@@ -1,17 +1,16 @@
 {
+  "useremailaddress": "YOUR_ID@DOMAIN",
   "migrations": [
     {
       "source": {
-        "platform": "sftp",
-        "host": "IP_ADDR_OR_DNS_NAME",
-        "path": "PATH_TO_THE_FILE",
-        "login": "LOGIN_NAME",
-        "password": "PASSWORD",
-        "fileformat": "csv"
+        "platform": "hive",
+        "url": "your_jdbc_hive_url",
+        "dbtable":"your_dbtable",
+        "username":""
       },
       "destination": {
         "platform": "filesystem",
-        "path": "target/classes/SampleData_Json",
+        "path": "target/classes/SampleHiveData_Json",
         "fileformat": "json"
       }
     }

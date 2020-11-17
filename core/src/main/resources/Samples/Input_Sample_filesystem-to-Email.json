@@ -2,17 +2,16 @@
   "migrations": [
     {
       "source": {
-        "platform": "sftp",
-        "host": "IP_ADDR_OR_DNS_NAME",
-        "path": "PATH_TO_THE_FILE",
-        "login": "LOGIN_NAME",
-        "password": "PASSWORD",
-        "fileformat": "csv"
+        "platform": "filesystem",
+        "path": "/Users/yourname/Desktop/Sample-Optmeio-report.json",
+        "fileformat": "json"
       },
       "destination": {
-        "platform": "filesystem",
-        "path": "target/classes/SampleData_Json",
-        "fileformat": "json"
+        "platform": "Email",
+        "to": "yourname@expediagroup.com",
+        "subject":"Test",
+        "limit":"100",
+        "truncate":"100"
       }
     }
   ],
