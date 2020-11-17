@@ -1411,16 +1411,6 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
           driver = "org.postgresql.Driver"
           url = "jdbc:postgresql://" + server + ":" + (if (port == null) "5432" else port) + "/" + database + (if (sslEnabled == "true") "?sslmode=require" else "")
         }
-      
-      else if (platform == "oracle") {
-        driver = "oracle.jdbc.driver.OracleDriver"
-        url = "jdbc:oracle:thin:@//" + server + ":" + (if (port == null) "1521" else port) + "/" + database
-
-      }
-      else if (platform == "teradata") {
-        driver = "com.teradata.jdbc.TeraDriver"
-        url = "jdbc:teradata://" + server + ":" + (if (port == null) "1025" else port) + "/" + database
-      }
       }
 
       val consul = new Consul(server, appConfig)
