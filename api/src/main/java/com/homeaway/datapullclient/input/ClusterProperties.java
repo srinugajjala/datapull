@@ -22,6 +22,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -33,6 +34,9 @@ public class ClusterProperties {
 
     @JsonProperty("awsenv")
     private String awsEnv;
+
+    @JsonProperty("emr_security_configuration")
+    private String emr_security_configuration;
 
     @JsonProperty("cronexpression")
     private String cronExpression;
@@ -67,14 +71,35 @@ public class ClusterProperties {
     @JsonProperty("sparksubmitparams")
     private String sparksubmitparams;
 
-    @JsonProperty("subnet_id")
+    @JsonAlias({"subnet_id","subnet"})
     private String subnetId;
 
-    @JsonAlias({"emr_instance_count", "NodeCount"})
+    @JsonAlias({"emr_instance_count", "nodecount", "NodeCount"})
     private String emrInstanceCount;
 
     @JsonProperty("emr_release_version")
     private String emrReleaseVersion;
+
+    @JsonProperty("hive_properties")
+    private Map<String, String> hiveProperties = new HashMap<String, String>();
+
+    @JsonProperty("core_site_properties")
+    private Map<String, String> coreSiteProperties = new HashMap<String, String>();
+
+    @JsonProperty("spark_hive_properties")
+    private Map<String, String> sparkHiveProperties = new HashMap<String, String>();
+
+    @JsonProperty("spark_defaults_properties")
+    private Map<String, String> sparkDefaultsProperties = new HashMap<String, String>();
+
+    @JsonProperty("spark_env_properties")
+    private Map<String, String> sparkEnvProperties = new HashMap<String, String>();
+
+    @JsonProperty("hdfs_properties")
+    private Map<String, String> hdfsProperties = new HashMap<String, String>();
+
+    @JsonProperty("spark_metrics_properties")
+    private Map<String, String> sparkMetricsProperties = new HashMap<String, String>();
 
     @JsonAlias({"ComponentInfo", "component_info"})
     private String componentInfo;
@@ -88,9 +113,32 @@ public class ClusterProperties {
     @JsonAlias({"Team", "team"})
     private String team;
 
+    @JsonAlias({"Brand", "brand"})
+    private String brand;
+
+    @JsonAlias({"Application", "application"})
+    private String application;
+
+    @JsonAlias({"CostCenter", "costcenter"})
+    private String costCenter;
+
     @JsonAlias({"Tags", "tags"})
     private Map<String, String> tags = new HashMap<String, String>();
 
+    @JsonProperty("bootstrapactionstring")
+    private String bootstrapactionstring;
+
+    @JsonProperty("bootstrap_action_file_path")
+    private String bootstrap_action_file_path;
+
+    @JsonAlias("bootstrap_action_arguments")
+    private List<String> bootstrap_action_arguments;
+
+    @JsonProperty("forcerestart")
+    private Boolean forceRestart = false;
+
+    @JsonAlias("spark_submit_arguments")
+    private List<String> spark_submit_arguments;
 
     private String env;
 
@@ -116,7 +164,15 @@ public class ClusterProperties {
                 ", portfolio='" + portfolio + '\'' +
                 ", product='" + product + '\'' +
                 ", team='" + team + '\'' +
+                ", bootstrapactionstring='" + bootstrapactionstring + '\'' +
+                ", bootstrap_action_file_path='" + bootstrap_action_file_path + '\'' +
                 ", env='" + env + '\'' +
+                ", brand='" + brand + '\'' +
+                ", costcenter='" + costCenter + '\'' +
+                ", bootstrap_action_arguments='" + bootstrap_action_arguments + '\'' +
+                ", forcerestart='" + forceRestart + '\'' +
+                ", application='" + application + '\'' +
+                ", spark_submit_arguments='" + spark_submit_arguments + '\'' +
                 '}';
     }
 }

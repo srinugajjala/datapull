@@ -1,4 +1,3 @@
-import ammonite.ops._
 import $ivy.`com.typesafe:config:1.3.1`
 import $ivy.`com.fasterxml.jackson.core:jackson-databind:2.9.4`
 import $ivy.`com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.9.8`
@@ -16,14 +15,13 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator.Feature
 import scala.collection.mutable.ListBuffer
 
-
 <!-- https://mvnrepository.com/artifact/com.typesafe/config -->
 
 @main
 def mainA(args: String*) = {
   val OVERRIDE_PROPERTIES = Seq("")
-  val env  = args(0)
-  println("Running script for env = "+env)
+  val env = args(0)
+  println("Running script for env = " + env)
   val yamlMapper = new ObjectMapper(new YAMLFactory().enable(Feature.MINIMIZE_QUOTES));
   val apiConfigFile = String.format("application.yml", env)
   val apiconfig = yamlMapper.readTree(new File(apiConfigFile))

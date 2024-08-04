@@ -21,29 +21,36 @@ import org.codehaus.jettison.json.JSONArray
 
 import scala.collection.mutable.ListBuffer
 
-class Consul (dnsName: String, config : AppConfig) {
+class Consul(dnsName: String, config: AppConfig) {
   //primary constructor
   private var dataCenter = ""
+  private val consulPattern = "\\b([^ ]+)\\.service\\.([^ ]+)\\.consul\\b".r
   var serviceName = ""
   var ipAddresses = List.empty[String]
 
-  private val dataCenters = Map("us-aus-1-prod"->"prod.vxe",
-    "us-aus-1-dts"->"dts.vxe",
-    "us-aus-1-itdev"->"dts.vxe")
+  private val dataCenters = config.consul_datacenters
 
   if (IsConsulDNSName()) {
-    val dnsParts = dnsName.split("\\.")
-    dataCenter = dnsParts(2).toLowerCase
-    serviceName = dnsParts(0)
+    val consulPattern(rServiceName, rDataCenter) = dnsName
+    this.serviceName = rServiceName
+    this.dataCenter = rDataCenter
     GetIpAddresses
   }
 
-  private def ApiUrl (): String = {
-    "http://" + dataCenter + ".consul." + dataCenters(dataCenter) + ".away.black:8500"
+  private def ApiUrl(): String = {
+    if (config.consul_url != null && (!config.consul_url.isEmpty) && (config.consul_url != "")) {
+      config.consul_url
+    } else {
+      config.consul_datacenters.getOrElse(this.dataCenter, "")
+    }
   }
 
   def IsConsulDNSName(): Boolean = {
-    dnsName.matches("\\b[a-zA-Z0-9-_]+.service.[a-zA-Z0-9-_]+.consul\\b")
+    dnsName.matches(consulPattern.regex) && (
+      (config.consul_url != null && (!config.consul_url.isEmpty) && (config.consul_url != ""))
+      ||
+        (config.consul_datacenters != null && config.consul_datacenters.size > 0)
+      )
   }
 
   private def GetIpAddresses(): Unit = {
@@ -52,7 +59,7 @@ class Consul (dnsName: String, config : AppConfig) {
     if (httpResponse.ResponseCode == 200) {
       val ipAddressBuffer = ListBuffer.empty[String]
       val jsonResponse = new JSONArray(httpResponse.ResponseBody)
-      for (i <- 0 to jsonResponse.length()-1) {
+      for (i <- 0 to jsonResponse.length() - 1) {
         ipAddressBuffer.append(jsonResponse.getJSONObject(i).getString("Address"))
       }
       ipAddresses = ipAddressBuffer.toList

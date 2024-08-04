@@ -13,10 +13,6 @@
 
 package core
 
-import java.io.{FileNotFoundException, PrintWriter, StringWriter}
-import java.time.Instant
-import java.util.UUID
-
 import com.amazonaws.auth.{AWSStaticCredentialsProvider, BasicAWSCredentials, DefaultAWSCredentialsProviderChain}
 import com.amazonaws.regions.{DefaultAwsRegionProviderChain, Regions}
 import com.amazonaws.services.s3.{AmazonS3, AmazonS3ClientBuilder}
@@ -26,10 +22,14 @@ import helper._
 import logging._
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.SizeEstimator
 import org.codehaus.jettison.json.{JSONArray, JSONObject}
-import security.SecretsManager
+import security.SecretService
 
+import java.io.{FileNotFoundException, PrintWriter, StringWriter}
+import java.time.Instant
+import java.util.UUID
 import scala.collection.immutable.List
 import scala.collection.mutable.ListBuffer
 
@@ -37,6 +37,9 @@ import scala.collection.mutable.ListBuffer
 class Migration extends SparkListener {
   //do a migration dammit!
 
+  //constants
+  val elasticSearchDefaultPort: Int = 9200
+  val secretStoreDefaultValue: String = "vault"
   var appConfig: AppConfig = null;
 
   def migrate(migrationJSONString: String, reportEmailAddress: String, migrationId: String, verifymigration: Boolean, reportCounts: Boolean, no_of_retries: Int, custom_retries: Boolean, migrationLogId: String, isLocal: Boolean, preciseCounts: Boolean, appConfig: AppConfig, pipeline: String): Map[String, String] = {
@@ -45,7 +48,7 @@ class Migration extends SparkListener {
     val migration: JSONObject = new JSONObject(migrationJSONString)
     val dataPullLogs = new DataPullLog(appConfig, pipeline)
     this.appConfig = appConfig;
-
+    val helper = new Helper(appConfig)
     var sparkSession: SparkSession = null
 
     if (isLocal) {
@@ -109,11 +112,21 @@ class Migration extends SparkListener {
 
     try {
 
+      if (migration.has("properties")) {
+        DataPull.setExternalSparkConf(sparkSession, migration.getJSONObject("properties"))
+      }
+
       var overrideSql = ""
       if (migration.has("sql")) {
 
         val sql = migration.getJSONObject("sql")
-        overrideSql = sql.getString("query")
+        if (sql.has("inputfile")) {
+
+          overrideSql = helper.InputFileJsonToString(sparkSession = sparkSession, jsonObject = sql).getOrElse("")
+        }
+        else if (sql.has("query")) {
+          overrideSql = sql.getString("query")
+        }
       }
 
       if (migration.has("sources")) {
@@ -134,7 +147,7 @@ class Migration extends SparkListener {
         //run the pre-migration command for the source, if any
         jsonSourceDestinationRunPrePostMigrationCommand(selectedSource, true, reportRowHtml, sparkSession, pipeline)
 
-        df = jsonSourceDestinationToDataFrame(sparkSession, selectedSource, migrationLogId, jobId, s3TempFolderDeletionError, pipeline)
+        df = jsonSourceDestinationToDataFrame(sparkSession, selectedSource, migrationLogId, jobId, s3TempFolderDeletionError, pipeline,appConfig)
 
         if (platform == "mssql") {
           size_of_the_records += SizeEstimator.estimate(df)
@@ -189,112 +202,192 @@ class Migration extends SparkListener {
 
       if (destinationMap("platform") == "cassandra") {
         destinationMap = destinationMap ++ deriveClusterIPFromConsul(destinationMap)
-        dataframeFromTo.dataFrameToCassandra(destinationMap("awsenv"), destinationMap("cluster"), destinationMap("keyspace"), destinationMap("table"), destinationMap("login"), destinationMap("password"), destinationMap("local_dc"), destination.optJSONObject("sparkoptions"), dft, reportRowHtml, destinationMap("vaultenv"), destinationMap.getOrElse("secretstore", "vault"))
+        dataframeFromTo.dataFrameToCassandra(destinationMap("awsenv"), destinationMap("cluster"), destinationMap("keyspace"), destinationMap("table"), destinationMap("login"), destinationMap("password"), destinationMap("local_dc"), destination.optJSONObject("sparkoptions"), dft, reportRowHtml, destinationMap("vaultenv"), destinationMap.getOrElse("secretstore", secretStoreDefaultValue))
       }
       else if (destinationMap("platform") == "Email") {
         dataframeFromTo.dataFrameToEmail(destinationMap.getOrElse("to", reportEmailAddress), destinationMap.getOrElse("subject", "Datapull Result"), dft, destinationMap.getOrElse("limit", "100"), destinationMap.getOrElse("truncate", "100"))
       }
       else if (destinationMap("platform") == "mssql" || destinationMap("platform") == "mysql" || destinationMap("platform") == "postgres" || destinationMap("platform") == "oracle" || destinationMap("platform") == "teradata") {
-        dataframeFromTo.dataFrameToRdbms(destinationMap("platform"), destinationMap("awsenv"), destinationMap("server"), destinationMap("database"), destinationMap("table"), destinationMap("login"), destinationMap("password"), dft, destinationMap("vaultenv"), destinationMap.getOrElse("secretstore", "vault"), destinationMap.getOrElse("sslenabled", "false"), destinationMap.getOrElse("port", null), destination.optJSONObject("jdbcoptions"), destinationMap.getOrElse("savemode", "Append"), destinationMap.getOrElse("iswindowsauthenticated", "false"), destinationMap.getOrElse("domain", null))
+        dataframeFromTo.dataFrameToRdbms(
+          platform = destinationMap("platform"),
+          awsEnv = destinationMap("awsenv"),
+          server = destinationMap("server"),
+          database = destinationMap("database"),
+          table = destinationMap("table"),
+          login = destinationMap("login"),
+          password = destinationMap("password"),
+          df = dft,
+          vaultEnv = destinationMap("vaultenv"),
+          secretStore = destinationMap.getOrElse("secretstore", secretStoreDefaultValue),
+          sslEnabled = destinationMap.getOrElse("sslenabled", "false").toBoolean,
+          port = destinationMap.getOrElse("port", null),
+          addlJdbcOptions = destination.optJSONObject("jdbcoptions"),
+          savemode = destinationMap.getOrElse("savemode", "Append"),
+          isWindowsAuthenticated = destinationMap.getOrElse("iswindowsauthenticated", destinationMap.getOrElse("isWindowsAuthenticated", "false")).toBoolean,
+          domainName = destinationMap.getOrElse("domain", null),
+          typeForTeradata = destinationMap.get("typeforteradata")
+        )
       } else if (destinationMap("platform") == "s3") {
         setAWSCredentials(sparkSession, destinationMap)
         sparkSession.sparkContext.hadoopConfiguration.set("mapreduce.input.fileinputformat.‌​input.dir.recursive", "true")
-        dataframeFromTo.dataFrameToFile(destinationMap("s3path"), destinationMap("fileformat"), destinationMap("groupbyfields"), destinationMap.getOrElse("savemode", "Append"), dft, true, destinationMap.getOrElse("secretstore", "vault"), sparkSession, destinationMap.getOrElse("coalescefilecount", null).asInstanceOf[Integer], false, destinationMap.getOrElse("login", "false"), destinationMap.getOrElse("host", "false"), destinationMap.getOrElse("password", "false"), destinationMap.getOrElse("pemfilepath", ""), destinationMap.getOrElse("awsEnv", "false"), destinationMap.getOrElse("vaultEnv", "false"), destinationMap.getOrElse("rowfromjsonstring", "false"), destinationMap.getOrElse("jsonStringFieldName", "jsonfield"))
+        dataframeFromTo.dataFrameToFile(
+          filePath = destinationMap("s3path"),
+          fileFormat = destinationMap("fileformat"),
+          groupByFields = destinationMap("groupbyfields"),
+          s3SaveMode = destinationMap.getOrElse("savemode", "Append"),
+          df = dft,
+          isS3 = true,
+          secretstore = destinationMap.getOrElse("secretstore", secretStoreDefaultValue),
+          sparkSession = sparkSession,
+          coalescefilecount = destinationMap.getOrElse("coalescefilecount", null),
+          isSFTP = false,
+          login = destinationMap.getOrElse("login", "false"),
+          host = destinationMap.getOrElse("host", "false"),
+          password = destinationMap.getOrElse("password", "false"),
+          pemFilePath = destinationMap.getOrElse("pemfilepath", ""),
+          awsEnv = destinationMap.getOrElse("awsEnv", "false"),
+          vaultEnv = destinationMap.getOrElse("vaultEnv", "false"),
+          rowFromJsonString = destinationMap.getOrElse("rowfromjsonstring", "false").toBoolean,
+          filePrefix = (if (destinationMap.contains("fileprefix")) destinationMap.get("fileprefix") else (if (destinationMap.contains("s3_service_endpoint")) Some("s3a://") else None)),
+          addlSparkOptions = (if (destination.optJSONObject("sparkoptions") == null) None else Some(destination.optJSONObject("sparkoptions")))
+        )
       } else if (destinationMap("platform") == "filesystem") {
         sparkSession.sparkContext.hadoopConfiguration.set("mapreduce.input.fileinputformat.‌​input.dir.recursive", "true")
-        dataframeFromTo.dataFrameToFile(destinationMap("path"), destinationMap("fileformat"), destinationMap("groupbyfields"), destinationMap.getOrElse("savemode", "Append"), dft, false, destinationMap.getOrElse("secretstore", "vault"), sparkSession, destinationMap.getOrElse("coalescefilecount", null).asInstanceOf[Integer], false, destinationMap.getOrElse("login", "false"), destinationMap.getOrElse("host", "false"), destinationMap.getOrElse("password", "false"), destinationMap.getOrElse("pemfilepath", ""), destinationMap.getOrElse("awsEnv", "false"), destinationMap.getOrElse("vaultEnv", "false"), destinationMap.getOrElse("rowfromjsonstring", "false"), destinationMap.getOrElse("jsonStringFieldName", "jsonfield"))
+        dataframeFromTo.dataFrameToFile(
+          filePath = destinationMap("path"),
+          fileFormat = destinationMap("fileformat"),
+          groupByFields = destinationMap("groupbyfields"),
+          s3SaveMode = destinationMap.getOrElse("savemode", "Append"),
+          df = dft,
+          isS3 = false,
+          secretstore = destinationMap.getOrElse("secretstore", secretStoreDefaultValue),
+          sparkSession = sparkSession,
+          coalescefilecount = destinationMap.getOrElse("coalescefilecount", null),
+          isSFTP = false,
+          login = destinationMap.getOrElse("login", "false"),
+          host = destinationMap.getOrElse("host", "false"),
+          password = destinationMap.getOrElse("password", "false"),
+          pemFilePath = destinationMap.getOrElse("pemfilepath", ""),
+          awsEnv = destinationMap.getOrElse("awsEnv", "false"),
+          vaultEnv = destinationMap.getOrElse("vaultEnv", "false"),
+          rowFromJsonString = destinationMap.getOrElse("rowfromjsonstring", "false").toBoolean,
+          filePrefix = destinationMap.get("fileprefix"),
+          addlSparkOptions = (if (destination.optJSONObject("sparkoptions") == null) None else Some(destination.optJSONObject("sparkoptions")))
+        )
       }
       else if (destinationMap("platform") == "sftp") {
-
-        dataframeFromTo.dataFrameToFile(destinationMap("path"), destinationMap("fileformat"), destinationMap("groupbyfields"), destinationMap.getOrElse("savemode", "Append"), dft, false, destinationMap.getOrElse("secretstore", "vault"), sparkSession, destinationMap.getOrElse("coalescefilecount", null).asInstanceOf[Integer], true, destinationMap.getOrElse("login", "false"), destinationMap.getOrElse("host", "false"), destinationMap.getOrElse("password", "false"), destinationMap.getOrElse("pemfilepath", ""), destinationMap.getOrElse("awsEnv", "false"), destinationMap.getOrElse("vaultEnv", "false"), destinationMap.getOrElse("rowfromjsonstring", "false"), destinationMap.getOrElse("jsonStringFieldName", "jsonfield"))
+        dataframeFromTo.dataFrameToFile(
+          filePath = destinationMap("path"),
+          fileFormat = destinationMap("fileformat"),
+          groupByFields = destinationMap("groupbyfields"),
+          s3SaveMode = destinationMap.getOrElse("savemode", "Append"),
+          df = dft,
+          isS3 = false,
+          secretstore = destinationMap.getOrElse("secretstore", secretStoreDefaultValue),
+          sparkSession = sparkSession,
+          coalescefilecount = destinationMap.getOrElse("coalescefilecount", null),
+          isSFTP = true,
+          login = destinationMap.getOrElse("login", "false"),
+          host = destinationMap.getOrElse("host", "false"),
+          password = destinationMap.getOrElse("password", "false"),
+          pemFilePath = destinationMap.getOrElse("pemfilepath", ""),
+          awsEnv = destinationMap.getOrElse("awsEnv", "false"),
+          vaultEnv = destinationMap.getOrElse("vaultEnv", "false"),
+          rowFromJsonString = destinationMap.getOrElse("rowfromjsonstring", "false").toBoolean,
+          filePrefix = destinationMap.get("fileprefix"),
+          addlSparkOptions = (if (destination.optJSONObject("sparkoptions") == null) None else Some(destination.optJSONObject("sparkoptions")))
+        )
+      }
+      else if (destinationMap("platform") == "console") {
+        val numRows: Int = destinationMap.getOrElse("numrows", "20").toInt
+        val truncateData: Boolean = destinationMap.getOrElse("truncate", "true").toBoolean
+        if (df.isStreaming) {
+          val query = dft.writeStream
+            .outputMode(destinationMap.getOrElse("outputmode", "append"))
+            .format("console")
+            .option("numRows", numRows.toString)
+            .option("truncate", truncateData.toString)
+            .start()
+        }
+        else {
+          df.show(numRows = numRows, truncate = truncateData)
+        }
       }
       else if (destinationMap("platform") == "hive") {
-        dataframeFromTo.dataFrameToHive(destinationMap("table"), destinationMap.getOrElse("savemode", "Append"), dft)
+        dataframeFromTo.dataFrameToHive(sparkSession, dft, destinationMap("table"), destinationMap("database"), destinationMap("format"), destinationMap("savemode"), destinationMap.getOrElse("partitions", "false").toBoolean)
       } else if (destinationMap("platform") == "mongodb") {
-        dataframeFromTo.dataFrameToMongodb(destinationMap("awsenv"), destinationMap("cluster"), destinationMap("database"), destinationMap("authenticationdatabase"), destinationMap("collection"), destinationMap("login"), destinationMap("password"), destinationMap.getOrElse("replicaset", null), destinationMap.getOrElse("replacedocuments", "true"), destinationMap.getOrElse("orderedrecords", "false"), dft, sparkSession, destinationMap.getOrElse("documentfromjsonfield", "false"), destinationMap.getOrElse("jsonfield", "jsonfield"), destinationMap("vaultenv"), destinationMap.getOrElse("secretstore", "vault"), destination.optJSONObject("sparkoptions"), destinationMap.get("maxBatchSize").getOrElse(null), destinationMap.getOrElse("authenticationenabled", true).asInstanceOf[Boolean])
+        dataframeFromTo.dataFrameToMongodb(destinationMap("awsenv"), destinationMap("cluster"), destinationMap("database"), destinationMap("authenticationdatabase"), destinationMap("collection"), destinationMap("login"), destinationMap("password"), destinationMap.getOrElse("replicaset", null), destinationMap.getOrElse("replacedocuments", "true"), destinationMap.getOrElse("orderedrecords", "false"), dft, sparkSession, destinationMap.getOrElse("documentfromjsonfield", "false"), destinationMap.getOrElse("jsonfield", "jsonfield"), destinationMap("vaultenv"), destinationMap.getOrElse("secretstore", secretStoreDefaultValue), destination.optJSONObject("sparkoptions"), destinationMap.get("maxBatchSize").getOrElse(null), destinationMap.getOrElse("authenticationenabled", true).asInstanceOf[Boolean], destinationMap.getOrElse("sslenabled", "false"))
       } else if (destinationMap("platform") == "kafka") {
-        dataframeFromTo.dataFrameToKafka(destinationMap("bootstrapservers"), destinationMap("schemaregistries"), destinationMap("topic"), destinationMap("keyfield"), destinationMap.getOrElse("keyformat", "string"), destination.optJSONObject("sparkoptions"), destinationMap.getOrElse("valuefield", null), destinationMap.getOrElse("headerfield", null), dft)
+        dataframeFromTo.dataFrameToKafka(
+          spark = sparkSession,
+          df = dft,
+          valueField = destinationMap.getOrElse("valuefield", "value"),
+          topic = destinationMap("topic"),
+          kafkaBroker = destinationMap("bootstrapservers"),
+          schemaRegistryUrl = destinationMap("schemaregistries"),
+          valueSchemaVersion = (if (destinationMap.get("valueschemaversion") == None) None else Some(destinationMap.getOrElse("valueschemaversion", "1").toInt)),
+          valueSubjectNamingStrategy = destinationMap.getOrElse("valuesubjectnamingstrategy", "TopicNameStrategy"),
+          valueSubjectRecordName = destinationMap.get("valuesubjectrecordname"),
+          valueSubjectRecordNamespace = destinationMap.get("valuesubjectrecordnamespace"),
+          keyField = destinationMap.get("keyfield"),
+          keySchemaVersion = (if (destinationMap.get("keyschemaversion") == None) None else Some(destinationMap.getOrElse("keyschemaversion", "1").toInt)),
+          keySubjectNamingStrategy = destinationMap.getOrElse("keysubjectnamingstrategy", "TopicNameStrategy"),
+          keySubjectRecordName = destinationMap.get("keysubjectrecordname"),
+          keySubjectRecordNamespace = destinationMap.get("keysubjectrecordnamespace"),
+          headerField = destinationMap.get("headerfield"),
+          keyStorePath = destinationMap.get("keystorepath"),
+          trustStorePath = destinationMap.get("truststorepath"),
+          keyStorePassword = destinationMap.get("keystorepassword"),
+          trustStorePassword = destinationMap.get("truststorepassword"),
+          keyPassword = destinationMap.get("keypassword"),
+          isStream = df.isStreaming,
+          keyFormat = destinationMap.getOrElse("keyformat", "avro"),
+          valueFormat = destinationMap.getOrElse("valueformat", "avro"),
+          addlSparkOptions = (if (destination.optJSONObject("sparkoptions") == null) None else Some(destination.optJSONObject("sparkoptions")))
+        )
       } else if (destinationMap("platform") == "elastic") {
-        dataframeFromTo.dataFrameToElastic(destinationMap("awsenv"), destinationMap("clustername"), destinationMap("port"), destinationMap("index"), destinationMap("type"), destinationMap("version"), destinationMap("login"), destinationMap("password"), destinationMap("local_dc"), destination.optJSONObject("sparkoptions"), dft, reportRowHtml, destinationMap("vaultenv"), destinationMap.getOrElse("savemode", "index"), destinationMap.getOrElse("mappingid", null), destinationMap.getOrElse("flag", "false"), destinationMap.getOrElse("secretstore", "vault"), sparkSession)
+        dataframeFromTo.dataFrameToElastic(
+          awsEnv = destinationMap("awsenv"),
+          cluster = destinationMap("clustername"),
+          port = destinationMap.getOrElse("port", elasticSearchDefaultPort.toString).toInt,
+          index = destinationMap("index"),
+          nodetype = destinationMap.get("type"),
+          version = destinationMap("version"),
+          login = destinationMap("login"),
+          password = destinationMap("password"),
+          local_dc = destinationMap("local_dc"),
+          addlESOptions = if (destination.optJSONObject("esoptions") == null) None else Some(destination.optJSONObject("esoptions")),
+          df = dft,
+          vaultEnv = destinationMap("vaultenv"),
+          saveMode = destinationMap.getOrElse("savemode", "index"),
+          mappingId = destinationMap.getOrElse("mappingid", null),
+          flag = destinationMap.getOrElse("flag", "false"),
+          secretStore = destinationMap.getOrElse("secretstore", secretStoreDefaultValue),
+          sparkSession = sparkSession
+        )
       }
       else if (destinationMap("platform") == "cloudwatch") {
         dataframeFromTo.dataFrameToCloudWatch(destinationMap("groupname"), destinationMap("streamname"), destinationMap.getOrElse("region", ""), destinationMap.getOrElse("awsaccesskeyid", ""), destinationMap.getOrElse("awssecretaccesskey", ""), destinationMap.getOrElse("timestamp_column", ""), destinationMap.getOrElse("timestamp_format", ""), dft, sparkSession)
-      }
-      else if (destinationMap("platform") == "neo4j") {
-        var node1 = destination.optJSONObject("node1")
-        var node2 = destination.optJSONObject("node2")
-        var relation = destination.optJSONObject("relation")
-        var node1_label: String = null
-        var node1_keys: List[String] = null
-        var node1_nonKeys: List[String] = null
-        var node1_createOrMerge: String = "MERGE"
-        var node1_createNodeKeyConstraint: Boolean = true
-        var node2_label: String = null
-        var node2_keys: List[String] = null
-        var node2_nonKeys: List[String] = null
-        var node2_createOrMerge: String = "MERGE"
-        var node2_createNodeKeyConstraint: Boolean = true
-        var relation_label: String = null
-        var relation_createOrMerge: String = "MERGE"
-        if (node1 != null) {
-          node1_label = node1.optString("label")
-          node1_keys = jsonArrayToList(node1.optJSONArray("properties_key"))
-          node1_nonKeys = jsonArrayToList(node1.optJSONArray("properties_nonkey"))
-          if (node1.has("createormerge")) {
-            node1_createOrMerge = node1.getString("createormerge")
-          }
-          if (node1.has("createnodekeyconstraint")) {
-            node1_createNodeKeyConstraint = node1.getBoolean("createnodekeyconstraint")
-          }
-          if (node1.has("property_key")) {
-            node1_keys = node1.getString("property_key") :: node1_keys
-          }
-          if (node1.has("property_nonkey")) {
-            node1_nonKeys = node1.getString("property_nonkey") :: node1_nonKeys
-          }
-        }
-        if (node2 != null) {
-          node2_label = node2.optString("label")
-          node2_keys = jsonArrayToList(node2.optJSONArray("properties_key"))
-          node2_nonKeys = jsonArrayToList(node2.optJSONArray("properties_nonkey"))
-          if (node2.has("createormerge")) {
-            node2_createOrMerge = node2.getString("createormerge")
-          }
-          if (node2.has("createnodekeyconstraint")) {
-            node2_createNodeKeyConstraint = node2.getBoolean("createnodekeyconstraint")
-          }
-          if (node2.has("property_key")) {
-            node2_keys = node2.getString("property_key") :: node2_keys
-          }
-          if (node2.has("property_nonkey")) {
-            node2_nonKeys = node2.getString("property_nonkey") :: node2_nonKeys
-          }
-        }
-        if (relation != null) {
-          relation_label = relation.optString("label")
-          if (relation.has("createormerge")) {
-            relation_createOrMerge = relation.getString("createormerge")
-          }
-        }
-
-        dataframeFromTo.dataFrameToNeo4j(dft, destinationMap("cluster"), destinationMap("login"), destinationMap.getOrElse("password", ""), destinationMap("awsenv"), destinationMap("vaultenv"), node1_label, node1_keys, node1_nonKeys, node2_label, node2_keys, node2_nonKeys, relation_label, destinationMap.getOrElse("batchsize", "10000").toInt, node1_createOrMerge, node1_createNodeKeyConstraint, node2_createOrMerge, node2_createNodeKeyConstraint, relation_createOrMerge, destinationMap.getOrElse("secretstore", "vault"), sparkSession)
-      }
-      else if (destinationMap("platform") == "snowflake") {
-        dataframeFromTo.dataFrameToSnowflake (
-          destinationMap("url"), 
-          destinationMap("user"), 
-          destinationMap("password"), 
-          destinationMap("database"), 
+      } else if (destinationMap("platform") == "snowflake") {
+        dataframeFromTo.dataFrameToSnowflake(
+          destinationMap("url"),
+          destinationMap("user"),
+          destinationMap("password"),
+          destinationMap("database"),
           destinationMap("schema"),
           destinationMap("table"),
           destinationMap.getOrElse("savemode", "Append"),
           destination.optJSONObject("options"),
           destinationMap("awsenv"),
           destinationMap("vaultenv"),
-          destinationMap.getOrElse("secretstore", "vault"),
-          dft, 
+          destinationMap.getOrElse("secretstore", secretStoreDefaultValue),
+          dft,
           sparkSession
         )
+      }
+
+      if (dft.isStreaming) {
+        sparkSession.streams.awaitAnyTermination()
       }
 
       def prePostFortmpS3(datastore: JSONObject): Unit = {
@@ -310,7 +403,14 @@ class Migration extends SparkListener {
         ) {
           var region: String = ""
           if (datastore.has("tmpfilelocation")) {
-            tmp_file_location = datastore.get("tmpfilelocation").toString
+
+            val s3Uri = datastore.get("tmpfilelocation").toString
+            val strippedUri = s3Uri.stripPrefix("s3://")
+
+            println(s"URI without s3://: $strippedUri")
+
+            tmp_file_location = strippedUri
+
           } else {
             tmp_file_location = datastore.get("s3location").toString
           }
@@ -341,7 +441,7 @@ class Migration extends SparkListener {
       if (reportEmailAddress != "") {
         sparkSession.sparkContext.setJobDescription("Count destination " + migrationId)
         if (verifymigration) {
-          var dfd = jsonSourceDestinationToDataFrame(sparkSession, destination, migrationLogId, jobId, s3TempFolderDeletionError, pipeline)
+          var dfd = jsonSourceDestinationToDataFrame(sparkSession, destination, migrationLogId, jobId, s3TempFolderDeletionError, pipeline, appConfig)
           verified = verifymigrations(df, dfd, sparkSession)
 
         }
@@ -394,20 +494,11 @@ class Migration extends SparkListener {
     Map("reportRowHtml" -> reportRowHtml.toString(), "migrationError" -> migrationException, "deletionError" -> s3TempFolderDeletionError.toString())
   }
 
-  def jsonArrayToList(jsonArray: JSONArray): List[String] = {
-    if (jsonArray != null) {
-      val arrayLen = jsonArray.length()
-      val retVal = new Array[String](arrayLen)
-      for (i <- 0 to arrayLen - 1) {
-        retVal(i) = jsonArray.getString(i)
-      }
-      retVal.toList
-    } else {
-      List.empty[String]
-    }
-  }
+  def jsonSourceDestinationToDataFrame(sparkSession: org.apache.spark.sql.SparkSession, platformObject1: JSONObject, migrationId: String, jobId: String, s3TempFolderDeletionError: StringBuilder, pipeline: String, appConfig: AppConfig): org.apache.spark.sql.DataFrame = {
 
-  def jsonSourceDestinationToDataFrame(sparkSession: org.apache.spark.sql.SparkSession, platformObject: JSONObject, migrationId: String, jobId: String, s3TempFolderDeletionError: StringBuilder, pipeline: String): org.apache.spark.sql.DataFrame = {
+    val helper = new Helper(appConfig)
+    val platformObject= helper.ReplaceInlineExpressions(platformObject1,optionalJsonPropertiesList())
+
     var propertiesMap = jsonObjectPropertiesToMap(platformObject)
     //add optional keysp explicitely else the map will complain they don't exist later down
     propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(optionalJsonPropertiesList(), platformObject)
@@ -416,59 +507,175 @@ class Migration extends SparkListener {
       propertiesMap = extractCredentialsFromSecretManager(propertiesMap)
     }
 
+    val platform = propertiesMap("platform")
+    val dataframeFromTo = new DataFrameFromTo(appConfig, pipeline)
 
-    var platform = propertiesMap("platform")
-    var dataframeFromTo = new DataFrameFromTo(appConfig, pipeline)
 
     if (platform == "mssql" || platform == "mysql" || platform == "oracle" || platform == "postgres" || platform == "teradata") {
+
       val sqlQuery = mssqlPlatformQueryFromS3File(sparkSession, platformObject)
-      dataframeFromTo.rdbmsToDataFrame(platform, propertiesMap("awsenv"), propertiesMap("server"), propertiesMap("database"), if (sqlQuery == "") {
-        propertiesMap("table")
-      } else {
-        "(" + sqlQuery + ") S"
-      }, propertiesMap("login"), propertiesMap("password"), sparkSession, propertiesMap("primarykey"), propertiesMap("lowerBound"), propertiesMap("upperBound"), propertiesMap("numPartitions"), propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", "vault"), propertiesMap.getOrElse("sslenabled", "false"), propertiesMap.getOrElse("vault", null), platformObject.optJSONObject("jdbcoptions"), propertiesMap.getOrElse("iswindowsauthenticated", "false"), propertiesMap.getOrElse("domain", null))
+      dataframeFromTo.rdbmsToDataFrame(
+        platform = platform,
+        awsEnv = propertiesMap("awsenv"),
+        server = propertiesMap("server"),
+        database = propertiesMap("database"),
+        table = if (sqlQuery == "") {
+          propertiesMap("table")
+        } else {
+          "(" + sqlQuery + ") S"
+        },
+        login = propertiesMap("login"),
+        password = propertiesMap("password"),
+        sparkSession = sparkSession,
+        primarykey = propertiesMap("primarykey"),
+        lowerbound = propertiesMap("lowerBound"),
+        upperbound = propertiesMap("upperBound"),
+        numofpartitions = propertiesMap("numPartitions"),
+        vaultEnv = propertiesMap("vaultenv"),
+        secretStore = propertiesMap.getOrElse("secretstore", secretStoreDefaultValue),
+        sslEnabled = propertiesMap.getOrElse("sslenabled", "false").toBoolean,
+        port = propertiesMap.getOrElse("port", null),
+        addlJdbcOptions = platformObject.optJSONObject("jdbcoptions"),
+        isWindowsAuthenticated = propertiesMap.getOrElse("iswindowsauthenticated", propertiesMap.getOrElse("isWindowsAuthenticated", "false")).toBoolean,
+        domainName = propertiesMap.getOrElse("domain", null),
+        typeForTeradata = propertiesMap.get("typeforteradata")
+      )
     } else if (platform == "cassandra") {
       //DO NOT bring in the pre-migrate command in here, else it might run when getting the final counts
       propertiesMap = propertiesMap ++ deriveClusterIPFromConsul(jsonObjectPropertiesToMap(List("cluster", "cluster_key", "consul_dc"), platformObject))
-      dataframeFromTo.cassandraToDataFrame(propertiesMap("awsenv"), propertiesMap("cluster"), propertiesMap("keyspace"), propertiesMap("table"), propertiesMap("login"), propertiesMap("password"), propertiesMap("local_dc"), platformObject.optJSONObject("sparkoptions"), sparkSession, propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", "vault"))
+      dataframeFromTo.cassandraToDataFrame(propertiesMap("awsenv"), propertiesMap("cluster"), propertiesMap("keyspace"), propertiesMap("table"), propertiesMap("login"), propertiesMap("password"), propertiesMap("local_dc"), platformObject.optJSONObject("sparkoptions"), sparkSession, propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", secretStoreDefaultValue))
     } else if (platform == "s3") {
       sparkSession.sparkContext.hadoopConfiguration.set("mapreduce.input.fileinputformat.‌​input.dir.recursive", "true")
       setAWSCredentials(sparkSession, propertiesMap)
-      dataframeFromTo.fileToDataFrame(propertiesMap("s3path"), propertiesMap("fileformat"), propertiesMap.getOrElse("delimiter", ","), propertiesMap.getOrElse("charset", "utf-8"), propertiesMap.getOrElse("mergeschema", "false"), sparkSession, true, propertiesMap.getOrElse("secretstore", "vault"), false, propertiesMap.getOrElse("login", "false"), propertiesMap.getOrElse("host", "false"), propertiesMap.getOrElse("password", "false"), propertiesMap.getOrElse("pemfilepath", ""), propertiesMap.getOrElse("awsEnv", "false"), propertiesMap.getOrElse("vaultEnv", "false"))
+      dataframeFromTo.fileToDataFrame(
+        filePath = propertiesMap("s3path"),
+        fileFormat = propertiesMap("fileformat"),
+        delimiter = propertiesMap.getOrElse("delimiter", ","),
+        charset = propertiesMap.getOrElse("charset", "utf-8"),
+        mergeSchema = propertiesMap.getOrElse("mergeschema", "false").toBoolean,
+        sparkSession = sparkSession,
+        isS3 = true,
+        secretstore = propertiesMap.getOrElse("secretstore", secretStoreDefaultValue),
+        login = propertiesMap.getOrElse("login", "false"),
+        host = propertiesMap.getOrElse("host", "false"),
+        password = propertiesMap.getOrElse("password", "false"),
+        pemFilePath = propertiesMap.getOrElse("pemfilepath", ""),
+        awsEnv = propertiesMap.getOrElse("awsEnv", "false"),
+        vaultEnv = propertiesMap.getOrElse("vaultEnv", "false"),
+        isStream = propertiesMap.getOrElse("isstream", "false").toBoolean,
+        addlSparkOptions = (if (platformObject.optJSONObject("sparkoptions") == null) None else Some(platformObject.optJSONObject("sparkoptions"))),
+        filePrefix = (if (propertiesMap.contains("fileprefix")) propertiesMap.get("fileprefix") else (if (propertiesMap.contains("s3_service_endpoint")) Some("s3a://") else None)),
+        schema = (if (propertiesMap.contains("schema")) Some(StructType.fromDDL(propertiesMap.getOrElse("schema", ""))) else None)
+      )
     } else if (platform == "filesystem") {
       sparkSession.sparkContext.hadoopConfiguration.set("mapreduce.input.fileinputformat.‌​input.dir.recursive", "true")
-      dataframeFromTo.fileToDataFrame(propertiesMap("path"), propertiesMap("fileformat"), propertiesMap.getOrElse("delimiter", ","), propertiesMap.getOrElse("charset", "utf-8"), propertiesMap.getOrElse("mergeschema", "false"), sparkSession, false, propertiesMap.getOrElse("secretstore", "vault"), false, propertiesMap.getOrElse("login", "false"), propertiesMap.getOrElse("host", "false"), propertiesMap.getOrElse("password", "false"), propertiesMap.getOrElse("pemfilepath", ""), propertiesMap.getOrElse("awsEnv", "false"), propertiesMap.getOrElse("vaultEnv", "false"))
+      dataframeFromTo.fileToDataFrame(
+        filePath = propertiesMap("path"),
+        fileFormat = propertiesMap("fileformat"),
+        delimiter = propertiesMap.getOrElse("delimiter", ","),
+        charset = propertiesMap.getOrElse("charset", "utf-8"),
+        mergeSchema = propertiesMap.getOrElse("mergeschema", "false").toBoolean,
+        sparkSession = sparkSession,
+        secretstore = propertiesMap.getOrElse("secretstore", secretStoreDefaultValue),
+        login = propertiesMap.getOrElse("login", "false"),
+        host = propertiesMap.getOrElse("host", "false"),
+        password = propertiesMap.getOrElse("password", "false"),
+        pemFilePath = propertiesMap.getOrElse("pemfilepath", ""),
+        awsEnv = propertiesMap.getOrElse("awsEnv", "false"),
+        vaultEnv = propertiesMap.getOrElse("vaultEnv", "false"),
+        isStream = propertiesMap.getOrElse("isstream", "false").toBoolean,
+        addlSparkOptions = (if (platformObject.optJSONObject("sparkoptions") == null) None else Some(platformObject.optJSONObject("sparkoptions"))),
+        filePrefix = propertiesMap.get("fileprefix"),
+        schema = (if (propertiesMap.contains("schema")) Some(StructType.fromDDL(propertiesMap.getOrElse("schema", ""))) else None)
+      )
     }
 
     else if (platform == "sftp") {
-      dataframeFromTo.fileToDataFrame(propertiesMap("path"), propertiesMap("fileformat"), propertiesMap.getOrElse("delimiter", ","), propertiesMap.getOrElse("charset", "utf-8"), propertiesMap.getOrElse("mergeschema", "false"), sparkSession, false, propertiesMap.getOrElse("secretstore", "vault"), true, propertiesMap.getOrElse("login", "false"), propertiesMap.getOrElse("host", "false"), propertiesMap.getOrElse("password", "false"), propertiesMap.getOrElse("pemfilepath", ""), propertiesMap.getOrElse("awsEnv", "false"), propertiesMap.getOrElse("vaultEnv", "false"))
+      dataframeFromTo.fileToDataFrame(
+        filePath = propertiesMap("path"),
+        fileFormat = propertiesMap("fileformat"),
+        delimiter = propertiesMap.getOrElse("delimiter", ","),
+        charset = propertiesMap.getOrElse("charset", "utf-8"),
+        mergeSchema = propertiesMap.getOrElse("mergeschema", "false").toBoolean,
+        sparkSession = sparkSession,
+        secretstore = propertiesMap.getOrElse("secretstore", secretStoreDefaultValue),
+        isSFTP = true,
+        login = propertiesMap.getOrElse("login", "false"),
+        host = propertiesMap.getOrElse("host", "false"),
+        password = propertiesMap.getOrElse("password", "false"),
+        pemFilePath = propertiesMap.getOrElse("pemfilepath", ""),
+        awsEnv = propertiesMap.getOrElse("awsEnv", "false"),
+        vaultEnv = propertiesMap.getOrElse("vaultEnv", "false"),
+        isStream = propertiesMap.getOrElse("isstream", "false").toBoolean,
+        addlSparkOptions = (if (platformObject.optJSONObject("sparkoptions") == null) None else Some(platformObject.optJSONObject("sparkoptions"))),
+        filePrefix = propertiesMap.get("fileprefix"),
+        schema = (if (propertiesMap.contains("schema")) Some(StructType.fromDDL(propertiesMap.getOrElse("schema", ""))) else None)
+      )
     }
     else if (platform == "hive") {
-      dataframeFromTo.hiveToDataFrame(propertiesMap("url"), sparkSession, propertiesMap("dbtable"), propertiesMap.getOrElse("username", ""), propertiesMap.getOrElse("fetchsize", ""))
+      dataframeFromTo.hiveToDataFrame(sparkSession, propertiesMap("query"))
     } else if (platform == "mongodb") {
-      dataframeFromTo.mongodbToDataFrame(propertiesMap("awsenv"), propertiesMap("cluster"), propertiesMap.getOrElse("overrideconnector", "false"), propertiesMap("database"), propertiesMap("authenticationdatabase"), propertiesMap("collection"), propertiesMap("login"), propertiesMap("password"), sparkSession, propertiesMap("vaultenv"), platformObject.optJSONObject("sparkoptions"), propertiesMap.getOrElse("secretstore", "vault"), propertiesMap.getOrElse("authenticationenabled", "true"), propertiesMap.getOrElse("tmpfilelocation", null), propertiesMap.getOrElse("samplesize", null))
+      dataframeFromTo.mongodbToDataFrame(propertiesMap("awsenv"), propertiesMap("cluster"), propertiesMap.getOrElse("overrideconnector", "false"), propertiesMap("database"), propertiesMap("authenticationdatabase"), propertiesMap("collection"), propertiesMap("login"), propertiesMap("password"), sparkSession, propertiesMap("vaultenv"), platformObject.optJSONObject("sparkoptions"), propertiesMap.getOrElse("secretstore", secretStoreDefaultValue), propertiesMap.getOrElse("authenticationenabled", "true"), propertiesMap.getOrElse("tmpfilelocation", null), propertiesMap.getOrElse("samplesize", null), propertiesMap.getOrElse("sslenabled", "false"))
     }
     else if (platform == "kafka") {
-      dataframeFromTo.kafkaToDataFrame(propertiesMap("bootstrapServers"), propertiesMap("topic"), propertiesMap("offset"), propertiesMap("schemaRegistries"), propertiesMap.getOrElse("keydeserializer", "org.apache.kafka.common.serialization.StringDeserializer"), propertiesMap("deSerializer"), propertiesMap.getOrElse("s3location", appConfig.s3bucket.toString + "/datapull-opensource/logs/"), propertiesMap.getOrElse("groupid", null), propertiesMap.getOrElse("requiredonlyvalue", "false"), propertiesMap.getOrElse("payloadcolumnname", "body"), migrationId, jobId, sparkSession, s3TempFolderDeletionError)
+      dataframeFromTo.kafkaToDataFrame(
+        spark = sparkSession,
+        kafkaBroker = propertiesMap("bootstrapservers"),
+        schemaRegistryUrl = propertiesMap("schemaregistries"),
+        topic = propertiesMap("topic"),
+        valueSchemaVersion = (if (propertiesMap.get("valueschemaversion") == None) None else Some(propertiesMap.getOrElse("valueschemaversion", "1").toInt)),
+        valueSubjectNamingStrategy = propertiesMap.getOrElse("valuesubjectnamingstrategy", "TopicNameStrategy"),
+        valueSubjectRecordName = propertiesMap.get("valuesubjectrecordname"),
+        valueSubjectRecordNamespace = propertiesMap.get("valuesubjectrecordnamespace"),
+        keySchemaVersion = (if (propertiesMap.get("keyschemaversion") == None) None else Some(propertiesMap.getOrElse("keyschemaversion", "1").toInt)),
+        keySubjectNamingStrategy = propertiesMap.getOrElse("keysubjectnamingstrategy", "TopicNameStrategy"),
+        keySubjectRecordName = propertiesMap.get("keysubjectrecordname"),
+        keySubjectRecordNamespace = propertiesMap.get("keysubjectrecordnamespace"),
+        keyStorePath = propertiesMap.get("keystorepath"),
+        trustStorePath = propertiesMap.get("truststorepath"),
+        keyStorePassword = propertiesMap.get("keystorepassword"),
+        trustStorePassword = propertiesMap.get("truststorepassword"),
+        keyPassword = propertiesMap.get("keypassword"),
+        keyFormat = propertiesMap.getOrElse("keyformat", "avro"),
+        valueFormat = propertiesMap.getOrElse("valueformat", "avro"),
+        addlSparkOptions = (if (platformObject.optJSONObject("sparkoptions") == null) None else Some(platformObject.optJSONObject("sparkoptions"))),
+        isStream = propertiesMap.getOrElse("isstream", "false").toBoolean,
+        streamWatermarkField = propertiesMap.getOrElse("streamwatermarkfield", "timestamp"),
+        streamWatermarkDelay = propertiesMap.get("streamwatermarkdelay"),
+        kafkaConnectMongodbOptions = (if (platformObject.optJSONObject("kafkaconnectmongodboptions") == null) None else Some(platformObject.optJSONObject("kafkaconnectmongodboptions")))
+      )
     }
     else if (platform == "elastic") {
-      dataframeFromTo.ElasticToDataframe(propertiesMap("awsenv"), propertiesMap("clustername"), propertiesMap("port"), propertiesMap("index"), propertiesMap("type"), propertiesMap("version"), propertiesMap("login"), propertiesMap("password"), propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", "vault"), sparkSession)
+      dataframeFromTo.ElasticToDataframe(
+        awsEnv = propertiesMap("awsenv"),
+        cluster = propertiesMap("clustername"),
+        port = propertiesMap.getOrElse("port", elasticSearchDefaultPort.toString).toInt,
+        index = propertiesMap("index"),
+        nodetype = propertiesMap.get("type"),
+        version = propertiesMap("version"),
+        login = propertiesMap("login"),
+        password = propertiesMap("password"),
+        vaultEnv = propertiesMap("vaultenv"),
+        secretStore = propertiesMap.getOrElse("secretstore", secretStoreDefaultValue),
+        sparkSession = sparkSession,
+        addlESOptions = if (platformObject.optJSONObject("esoptions") == null) None else Some(platformObject.optJSONObject("esoptions"))
+      )
     }
     else if (platform == "influxdb") {
-      dataframeFromTo.InfluxdbToDataframe(propertiesMap("awsenv"), propertiesMap("clustername"), propertiesMap("database"), propertiesMap("measurementname"), propertiesMap("login"), propertiesMap("password"), propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", "vault"), sparkSession)
+      dataframeFromTo.InfluxdbToDataframe(propertiesMap("awsenv"), propertiesMap("clustername"), propertiesMap("database"), propertiesMap("measurementname"), propertiesMap("login"), propertiesMap("password"), propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", secretStoreDefaultValue), sparkSession)
     }
-     else if (platform == "snowflake") {
+    else if (platform == "snowflake") {
       dataframeFromTo.snowflakeToDataFrame(
-        propertiesMap("url"), 
-        propertiesMap("user"), 
-        propertiesMap("password"), 
-        propertiesMap("database"), 
+        propertiesMap("url"),
+        propertiesMap("user"),
+        propertiesMap("password"),
+        propertiesMap("database"),
         propertiesMap("schema"),
         propertiesMap("table"),
         platformObject.optJSONObject("options"),
         propertiesMap("awsenv"),
         propertiesMap("vaultenv"),
-        propertiesMap.getOrElse("secretstore", "vault"),
+        propertiesMap.getOrElse("secretstore", secretStoreDefaultValue),
         sparkSession)
     }
     else {
@@ -480,34 +687,47 @@ class Migration extends SparkListener {
   def mssqlPlatformQueryFromS3File(sparkSession: org.apache.spark.sql.SparkSession, platformObject: JSONObject): String = {
     var sqlQuery = ""
     if (platformObject.has("querys3sqlfile")) {
-      val jsonMap = jsonObjectPropertiesToMap(List("s3path", "awsaccesskeyid", "awssecretaccesskey"), platformObject.getJSONObject("querys3sqlfile"))
-      setAWSCredentials(sparkSession, jsonMap)
-      sqlQuery = sparkSession.sparkContext.wholeTextFiles("s3n://" + jsonMap("s3path")).first()._2
+      val helper = new Helper(appConfig)
+      sqlQuery = helper.InputFileJsonToString(sparkSession = sparkSession, jsonObject = platformObject, inputFileObjectKey = "querys3sqlfile").getOrElse("")
     }
     sqlQuery
   }
 
   def extractCredentialsFromSecretManager(destinationMap: Map[String, String]): Map[String, String] = {
-    val secretManager = new SecretsManager(appConfig)
+    val secretManager = new SecretService("aws_secrets_manager", appConfig)
     val secretName = destinationMap.getOrElse("secret_name", "");
     val mm = collection.mutable.Map[String, String]() ++= destinationMap
-    val key_name: String = destinationMap.getOrElse("secret_key_name", null)
     if (secretName != null && !secretName.isEmpty) {
-      val secretCredentials = secretManager.getSecret(secretName, key_name)
+      val secretCredentials = secretManager.getSecret(secretName, destinationMap.get("secret_key_name"), None)
       mm.put("password", secretCredentials)
     }
     mm.toMap
   }
 
+  def deriveClusterIPFromConsul(clusterMap: Map[String, String]): Map[String, String] = {
+    var hostMap: Map[String, String] = Map()
+    if (!clusterMap.contains("cluster") || "".equals(clusterMap("cluster"))) {
+      //derive cluster using "cluster_key", "consul_dc"
+      val dnsName = s"${clusterMap("cluster_key")}.service.${clusterMap("consul_dc")}.consul"
+      val consul = new Consul(dnsName, appConfig)
+      if (!consul.ipAddresses.isEmpty) {
+        hostMap += "cluster" -> consul.ipAddresses.head
+      }
+    }
+    return hostMap
+  }
+
+  def optionalJsonPropertiesList(): List[String] = {
+    List("awsenv", "local_dc", "pre_migrate_command", "post_migrate_command", "groupbyfields", "primarykey", "lowerBound", "upperBound", "numPartitions", "s3path", "awsaccesskeyid", "awssecretaccesskey", "password", "vaultenv", "secret_store")
+  }
+
   def jsonSourceDestinationRunPrePostMigrationCommand(platformObject: JSONObject, runPreMigrationCommand: Boolean, reportbodyHtml: StringBuilder, sparkSession: SparkSession, pipeline: String): Unit = {
     var propertiesMap = jsonObjectPropertiesToMap(platformObject)
-    //add optional keysp explicitely else the map will complain they don't exist later down
+    //add optional keys explicitly else the map will complain they don't exist later down
     propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(optionalJsonPropertiesList(), platformObject)
     if (propertiesMap.getOrElse("secretstore", "").equals("aws_secrets_manager")) {
       propertiesMap = extractCredentialsFromSecretManager(propertiesMap)
     }
-    println ("Debug...")
-    println(propertiesMap)
     var platform = propertiesMap("platform")
     var pre_migrate_commands = new JSONArray()
     if (platformObject.has("pre_migrate_commands")) {
@@ -562,19 +782,43 @@ class Migration extends SparkListener {
 
       for (i <- 0 to lengthOfArray - 1) {
 
-        var dataframeFromTo = new DataFrameFromTo(appConfig, pipeline)
+        val dataframeFromTo = new DataFrameFromTo(appConfig, pipeline)
         if (platform == "mssql" || platform == "mysql" || platform == "oracle" || platform == "postgres" || platform == "teradata") {
-          dataframeFromTo.rdbmsRunCommand(platform, propertiesMap("awsenv"), propertiesMap("server"), propertiesMap.getOrElse("port", null), propertiesMap.getOrElse("sslenabled", null), propertiesMap("database"), command.getJSONObject(i).getString("query"), propertiesMap("login"), propertiesMap("password"), propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", "vault"), propertiesMap.getOrElse("iswindowsauthenticated", "false"), propertiesMap.getOrElse("domain", null))
+          dataframeFromTo.rdbmsRunCommand(
+            platform = platform,
+            awsEnv = propertiesMap("awsenv"),
+            server = propertiesMap("server"),
+            port = propertiesMap.getOrElse("port", null),
+            sslEnabled = propertiesMap.getOrElse("sslenabled", "false").toBoolean,
+            database = propertiesMap("database"),
+            sql_command = command.getJSONObject(i).getString("query"),
+            login = propertiesMap("login"),
+            password = propertiesMap("password"),
+            vaultEnv = propertiesMap("vaultenv"),
+            secretStore = propertiesMap.getOrElse("secretstore", secretStoreDefaultValue),
+            isWindowsAuthenticated = propertiesMap.getOrElse("iswindowsauthenticated", propertiesMap.getOrElse("isWindowsAuthenticated", "false")).toBoolean,
+            domainName = propertiesMap.getOrElse("domain", null),
+            typeForTeradata = propertiesMap.get("typeforteradata"),
+            colType = propertiesMap.get("coltype")
+          )
         }
         else if (platform == "cassandra") {
           propertiesMap = propertiesMap ++ deriveClusterIPFromConsul(jsonObjectPropertiesToMap(List("cluster", "cluster_key", "consul_dc"), platformObject))
-          dataframeFromTo.cassandraRunCommand(propertiesMap("awsenv"), propertiesMap("cluster"), propertiesMap("keyspace"), propertiesMap("login"), propertiesMap("password"), propertiesMap("local_dc"), platformObject.optJSONObject("sparkoptions"), command.getJSONObject(i).getString("query"), reportbodyHtml, propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", "vault"))
+          dataframeFromTo.cassandraRunCommand(propertiesMap("awsenv"), propertiesMap("cluster"), propertiesMap("keyspace"), propertiesMap("login"), propertiesMap("password"), propertiesMap("local_dc"), platformObject.optJSONObject("sparkoptions"), command.getJSONObject(i).getString("query"), reportbodyHtml, propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", secretStoreDefaultValue))
         } else if (platform == "mongodb") {
           propertiesMap = propertiesMap ++ deriveClusterIPFromConsul(jsonObjectPropertiesToMap(List("clustername", "cluster_key", "consul_dc"), platformObject))
-          dataframeFromTo.mongoRunCommand(propertiesMap("awsenv"), propertiesMap("cluster"), propertiesMap("database"), propertiesMap("authenticationdatabase"), propertiesMap("collection"), propertiesMap("login"), propertiesMap("password"), propertiesMap("vaultenv"), platformObject.optJSONObject("sparkoptions"), command.getJSONObject(i).getString("query"), propertiesMap.getOrElse("secretstore", "vault"), propertiesMap.getOrElse("authenticationenabled", true).asInstanceOf[Boolean])
+          dataframeFromTo.mongoRunCommand(propertiesMap("awsenv"), propertiesMap("cluster"), propertiesMap("database"), propertiesMap("authenticationdatabase"), propertiesMap("collection"), propertiesMap("login"), propertiesMap("password"), propertiesMap("vaultenv"), platformObject.optJSONObject("sparkoptions"), command.getJSONObject(i).getString("query"), propertiesMap.getOrElse("secretstore", secretStoreDefaultValue), propertiesMap.getOrElse("authenticationenabled", true).asInstanceOf[Boolean], propertiesMap.getOrElse("sslenabled", "false"))
         } else if (platform == "elastic") {
           propertiesMap = propertiesMap ++ deriveClusterIPFromConsul(jsonObjectPropertiesToMap(List("clustername", "cluster_key", "consul_dc"), platformObject))
-          dataframeFromTo.elasticRunCommand(propertiesMap("awsenv"), propertiesMap("clustername"), propertiesMap("port"), propertiesMap("index"), propertiesMap("login"), propertiesMap("password"), propertiesMap("local_dc"), platformObject.optJSONObject("sparkoptions"), command.getJSONObject(i).getString("shell"), reportbodyHtml, propertiesMap("vaultenv"), propertiesMap.getOrElse("secretstore", "vault"))
+          dataframeFromTo.elasticRunCommand(
+            awsEnv = propertiesMap("awsenv"),
+            cluster = propertiesMap("clustername"),
+            port = propertiesMap.getOrElse("port", elasticSearchDefaultPort.toString).toInt,
+            login = propertiesMap("login"),
+            password = propertiesMap("password"),
+            curlcommand = command.getJSONObject(i).getString("shell"),
+            vaultEnv = propertiesMap("vaultenv"),
+            secretStore = propertiesMap.getOrElse("secretstore", secretStoreDefaultValue))
         } else if (platform == "s3") {
           val s3QueryJson = command.optJSONObject(i)
           val operation = s3QueryJson.getString("operation")
@@ -588,10 +832,6 @@ class Migration extends SparkListener {
       }
     }
 
-  }
-
-  def optionalJsonPropertiesList(): List[String] = {
-    List("awsenv", "local_dc", "pre_migrate_command", "post_migrate_command", "groupbyfields", "primarykey", "lowerBound", "upperBound", "numPartitions", "s3path", "awsaccesskeyid", "awssecretaccesskey", "password", "vaultenv", "secret_store")
   }
 
   def s3ClientBuilder(platformObject: JSONObject, sparkSession: SparkSession): AmazonS3 = {
@@ -620,55 +860,37 @@ class Migration extends SparkListener {
     s3Client
   }
 
-  def deriveClusterIPFromConsul(clusterMap: Map[String, String]): Map[String, String] = {
-    var hostMap: Map[String, String] = Map()
-    if (!clusterMap.contains("cluster") || "".equals(clusterMap("cluster"))) {
-      //derive cluster using "cluster_key", "consul_dc"
-      val ipAddress: Option[String] = readIpAddressFromConsul(clusterMap("cluster_key"), clusterMap("consul_dc"))
-      if (ipAddress.isDefined) {
-        hostMap += "cluster" -> ipAddress.get
-      }
-    }
-    return hostMap
-  }
-
-  def readIpAddressFromConsul(clusterKey: String, consulDc: String): Option[String] = {
-    if (!"".equals(clusterKey) && !"".equals(consulDc)) {
-      val consulUrl = "" + appConfig.consul_url + s"$clusterKey?passing&dc=$consulDc"
-      val helper = new Helper(appConfig)
-      val responseString = helper.get(consulUrl)
-      val jSONArray = new JSONArray(responseString)
-      if (jSONArray.length() > 0 && jSONArray.getJSONObject(0).has("Node") && jSONArray.getJSONObject(0).getJSONObject("Node").has("Address")) {
-        return Option(jSONArray.getJSONObject(0).getJSONObject("Node").getString("Address"))
-      }
-    }
-    return Option.empty
-  }
-
-
   def printableSourceTargetInfo(platformObject: JSONObject): String = {
     var htmlString = StringBuilder.newBuilder
-    val platform = platformObject.getString("platform")
-    var propertiesMap = Map("platform" -> platform)
-    if (platform == "mssql") {
-      propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("server", "database", "table"), platformObject)
-    } else if (platform == "cassandra") {
-      propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("cluster", "keyspace", "table", "local_dc"), platformObject)
-      propertiesMap = propertiesMap ++ deriveClusterIPFromConsul(jsonObjectPropertiesToMap(List("cluster", "cluster_key", "consul_dc"), platformObject))
-    } else if (platform == "s3") {
-      propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("s3path", "fileformat", "awsaccesskeyid", "awssecretaccesskey"), platformObject)
-    } else if (platform == "filesystem") {
-      propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("path", "fileformat"), platformObject)
-    } else if (platform == "hive") {
-      propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("cluster", "clustertype", "database", "table"), platformObject)
-    } else if (platform == "mongodb") {
-      propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("cluster", "database", "authenticationdatabase", "collection", "login", "password"), platformObject)
-    } else if (platform == "kafka") {
-      propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("bootstrapServers", "schemaRegistries", "topic", "keyField", "keyFormat"), platformObject)
+    if (platformObject == null) {
+      htmlString.append("null platform object")
     }
-    htmlString.append("<dl>")
-    propertiesMap.filter((t) => t._2 != "" && t._1 != "login" && t._1 != "password" && t._1 != "awsaccesskeyid" && t._1 != "awssecretaccesskey").foreach(i => htmlString.append("<dt>" + i._1 + "</dt><dd>" + i._2 + "</dd>"))
-    htmlString.append("</dl>")
+    else if (!platformObject.has("platform")) {
+      htmlString.append(platformObject.toString())
+    }
+    else {
+      val platform = platformObject.getString("platform")
+      var propertiesMap = Map("platform" -> platform)
+      if (platform == "mssql") {
+        propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("server", "database", "table"), platformObject)
+      } else if (platform == "cassandra") {
+        propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("cluster", "keyspace", "table", "local_dc"), platformObject)
+        propertiesMap = propertiesMap ++ deriveClusterIPFromConsul(jsonObjectPropertiesToMap(List("cluster", "cluster_key", "consul_dc"), platformObject))
+      } else if (platform == "s3") {
+        propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("s3path", "fileformat", "awsaccesskeyid", "awssecretaccesskey"), platformObject)
+      } else if (platform == "filesystem") {
+        propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("path", "fileformat"), platformObject)
+      } else if (platform == "hive") {
+        propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("cluster", "clustertype", "database", "table"), platformObject)
+      } else if (platform == "mongodb") {
+        propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("cluster", "database", "authenticationdatabase", "collection", "login", "password"), platformObject)
+      } else if (platform == "kafka") {
+        propertiesMap = propertiesMap ++ jsonObjectPropertiesToMap(List("bootstrapServers", "schemaRegistries", "topic", "keyField", "keyFormat"), platformObject)
+      }
+      htmlString.append("<dl>")
+      propertiesMap.filter((t) => t._2 != "" && t._1 != "login" && t._1 != "password" && t._1 != "awsaccesskeyid" && t._1 != "awssecretaccesskey").foreach(i => htmlString.append("<dt>" + i._1 + "</dt><dd>" + i._2 + "</dd>"))
+      htmlString.append("</dl>")
+    }
     htmlString.toString()
   }
 
@@ -687,6 +909,19 @@ class Migration extends SparkListener {
     }
     else {
       return "failed"
+    }
+  }
+
+  def jsonArrayToList(jsonArray: JSONArray): List[String] = {
+    if (jsonArray != null) {
+      val arrayLen = jsonArray.length()
+      val retVal = new Array[String](arrayLen)
+      for (i <- 0 to arrayLen - 1) {
+        retVal(i) = jsonArray.getString(i)
+      }
+      retVal.toList
+    } else {
+      List.empty[String]
     }
   }
 

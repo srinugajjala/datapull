@@ -18,16 +18,15 @@ package core
 
 import java.io.{File, PrintWriter, StringWriter}
 import java.nio.charset.StandardCharsets
-import java.sql.{Connection, DriverManager, Statement, Timestamp}
+import java.sql._
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util
-import java.util.{Calendar, Properties, UUID}
+import java.util.{Calendar, UUID}
 
 import com.amazonaws.services.logs.model.{DescribeLogStreamsRequest, InputLogEvent, PutLogEventsRequest}
 import com.amazonaws.services.s3.model._
 import com.amazonaws.services.s3.{AmazonS3, AmazonS3ClientBuilder}
-import com.datastax.driver.core.exceptions.TruncateException
 import com.datastax.spark.connector.cql.CassandraConnector
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
@@ -41,43 +40,33 @@ import core.DataPull.jsonObjectPropertiesToMap
 import helper._
 import javax.mail.internet.{InternetAddress, MimeMessage}
 import javax.mail.{Message, Session, Transport}
-import org.apache.avro.generic.GenericData
+import net.snowflake.spark.snowflake.Utils.SNOWFLAKE_SOURCE_NAME
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FSDataOutputStream, FileSystem, Path}
-import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.spark.SparkConf
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.functions.{col, struct}
 import org.apache.spark.sql.jdbc.JdbcDialects
-import org.apache.spark.sql.types.StringType
-import org.apache.spark.sql.{Row, SaveMode, SparkSession}
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.{DataFrame, Row, SaveMode, SparkSession}
 import org.bson.Document
 import org.codehaus.jettison.json.JSONObject
 import org.elasticsearch.spark.sql._
 import org.influxdb.InfluxDBFactory
 import org.influxdb.dto.Query
 import security._
-import za.co.absa.abris.avro.functions.to_confluent_avro
-import za.co.absa.abris.avro.read.confluent.SchemaManager
+import za.co.absa.abris.avro.functions.{from_avro, to_avro}
+import za.co.absa.abris.config.FromAvroConfig
 
 import scala.collection.JavaConversions._
-import scala.collection.JavaConverters._
-import scala.collection.immutable.List
-import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ListBuffer, StringBuilder}
-import scala.util.control.Breaks._
-import net.snowflake.spark.snowflake.Utils.SNOWFLAKE_SOURCE_NAME
 
 class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializable {
+  val helper = new Helper(appConfig)
 
-  def fileToDataFrame(filePath: String, fileFormat: String, delimiter: String, charset: String, mergeSchema: String, sparkSession: org.apache.spark.sql.SparkSession, isS3: Boolean, secretstore: String, isSFTP: Boolean, login: String, host: String, password: String, pemFilePath: String, awsEnv: String, vaultEnv: String): org.apache.spark.sql.DataFrame = {
+  def fileToDataFrame(filePath: String, fileFormat: String, delimiter: String, charset: String, mergeSchema: Boolean = false, sparkSession: org.apache.spark.sql.SparkSession, isS3: Boolean = false, secretstore: String, isSFTP: Boolean = false, login: String, host: String, password: String, pemFilePath: String, awsEnv: String, vaultEnv: String, isStream: Boolean = false, addlSparkOptions: Option[JSONObject] = None, filePrefix: Option[String] = None, schema: Option[StructType] = None): org.apache.spark.sql.DataFrame = {
 
-    if (filePath == null && fileFormat == null && delimiter == null && charset == null && mergeSchema == null && sparkSession == null && login == null && host == null && password == null) {
+    if (filePath == null && fileFormat == null && delimiter == null && charset == null && sparkSession == null && login == null && host == null && password == null) {
       throw new Exception("Platform cannot have null values")
-    }
-
-    if (filePath == null && fileFormat == null && delimiter == null && charset == null && mergeSchema == null && sparkSession == null && login == null && host == null && password == null) {
-      throw new Exception("Platform cannot have empty values")
     }
 
     var vaultPassword = password
@@ -89,47 +78,93 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       vaultPassword = vaultCreds("password")
     }
 
-    var filePrefix = ""
+    var filePrefixString = filePrefix.getOrElse("")
 
     if (isS3) {
-      filePrefix = "s3://"
-      sparkSession.conf.set("fs.s3.connection.maximum", 100)
+      val s3Prefix = if (sparkSession.sparkContext.master == "local[*]") "s3a" else "s3"
+      filePrefixString = filePrefix.getOrElse(s3Prefix + "://")
+      sparkSession.conf.set("fs." + s3Prefix + ".connection.maximum", 100)
     }
 
     def createOrReplaceTempViewOnDF(df: org.apache.spark.sql.DataFrame): org.apache.spark.sql.DataFrame = {
       df
     }
 
+    var sparkOptions: Map[String, String] = Map.empty[String, String]
+
+    //add options by type
     if (isSFTP) {
-
-      createOrReplaceTempViewOnDF(sparkSession.read.
-        format("com.springml.spark.sftp").
-        option("host", host).
-        option("username", login).
-        option( if (pemFilePath == "")  "password" else "pem", if (pemFilePath == "")  password else pemFilePath).
-        option("fileType", fileFormat).
-        load(filePath))
-
+      sparkOptions = Map(
+        "host" -> host,
+        "username" -> vaultLogin,
+        (if (pemFilePath == "") "password" else "pem") -> (if (pemFilePath == "") vaultPassword else pemFilePath),
+        "fileType" -> fileFormat
+      )
+    }
+    if (fileFormat == "csv") {
+      sparkOptions = sparkOptions ++ Map(
+        "delimiter" -> delimiter,
+        "mode" -> "DROPMALFORMED",
+        "header" -> "true",
+        "charset" -> charset
+      )
+    } else if (fileFormat == "parquet") {
+      sparkOptions = sparkOptions ++ Map(
+        "mergeSchema" -> mergeSchema.toString.toLowerCase
+      )
     }
 
-    else {
-      if (fileFormat == "json") {
-        createOrReplaceTempViewOnDF(sparkSession.read.json(s"$filePrefix$filePath"))
-      } else if (fileFormat == "csv") {
-        createOrReplaceTempViewOnDF(sparkSession.read.format("csv")
-          .option("delimiter", delimiter)
-          .option("mode", "DROPMALFORMED")
-          .option("header", "true") //reading the headers
-          .option("charset", charset)
-          .csv(s"$filePrefix$filePath"))
+    if (!addlSparkOptions.isEmpty) {
+      sparkOptions = sparkOptions ++ jsonObjectPropertiesToMap(addlSparkOptions.get)
+    }
 
-      } else if (fileFormat == "avro") {
-        createOrReplaceTempViewOnDF(sparkSession.read.format("avro").load(s"$filePrefix$filePath"))
-      } else if (fileFormat == "orc") {
-        createOrReplaceTempViewOnDF(sparkSession.read.format("orc").load(s"$filePrefix$filePath"))
-      } else {
-        //parquet
-        createOrReplaceTempViewOnDF(sparkSession.read.option("mergeSchema", mergeSchema).parquet(s"$filePrefix$filePath"))
+    if (isSFTP) {
+      createOrReplaceTempViewOnDF(sparkSession.read
+        .format("com.springml.spark.sftp")
+        .options(sparkOptions)
+        .load(filePath))
+    }
+    else {
+      if (isStream) {
+        createOrReplaceTempViewOnDF(
+          sparkSession.readStream
+            .schema(schema.getOrElse(fileToDataFrame(
+              filePath = filePath,
+              fileFormat = fileFormat,
+              delimiter = delimiter,
+              charset = charset,
+              mergeSchema = mergeSchema,
+              sparkSession = sparkSession,
+              isS3 = isS3,
+              secretstore = secretstore,
+              login = login,
+              host = host,
+              password = password,
+              pemFilePath = pemFilePath,
+              awsEnv = awsEnv,
+              vaultEnv = vaultEnv,
+              isStream = false,
+              filePrefix = filePrefix
+            ).schema))
+            .format(fileFormat)
+            .options(sparkOptions)
+            .load(s"$filePrefixString$filePath")
+        )
+      }
+      else {
+        var dfReader = sparkSession
+          .read
+          .format(fileFormat)
+
+        if (!schema.isEmpty) {
+          dfReader = dfReader.schema(schema.get)
+        }
+
+        createOrReplaceTempViewOnDF(
+          dfReader
+            .options(sparkOptions)
+            .load(s"$filePrefixString$filePath")
+        )
       }
     }
   }
@@ -139,53 +174,12 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
 * Get ngram transformation
 */
 
-  implicit class RichDF(val ds: org.apache.spark.sql.DataFrame) {
-    def showHTML(limit: Int = 100, truncate: Int = 100): String = {
-      import xml.Utility.escape
-      val data = ds.take(limit)
-      val header = ds.schema.fieldNames.toSeq
-      val rows: Seq[Seq[String]] = data.map { row =>
-        row.toSeq.map { cell =>
-          val str = cell match {
-            case null => "null"
-            case binary: Array[Byte] => binary.map("%02X".format(_)).mkString("[", " ", "]")
-            case array: Array[_] => array.mkString("[", ", ", "]")
-            case seq: Seq[_] => seq.mkString("[", ", ", "]")
-            case _ => cell.toString
-          }
-          if (truncate > 0 && str.length > truncate) {
-            // do not show ellipses for strings shorter than 4 characters.
-            if (truncate < 4) str.substring(0, truncate)
-            else str.substring(0, truncate - 3) + "..."
-          } else {
-            str
-          }
-        }: Seq[String]
-      }
-      var bodyHtml = StringBuilder.newBuilder
-      bodyHtml = bodyHtml.append(
-        s"""<style>table, th, td {border: 1px solid black;}</style> <table>
-                <tr>
-                 ${header.map(h => s"<th>${escape(h)}</th>").mkString}
-                </tr>
-                ${
-          rows.map { row =>
-            s"<tr>${row.map { c => s"<td>${escape(c)}</td>" }.mkString}</tr>"
-          }.mkString
-        }
-            </table>
-        """)
-      bodyHtml.toString()
-
-    }
-  }
-
   def dataFrameToEmail(to: String, subject: String, df: org.apache.spark.sql.DataFrame, limit: String, truncate: String): Unit = {
     if (df == null) {
       throw new Exception("Platform cannot have null values")
     }
 
-    val bodyHtml = df.showHTML(limit.toInt, truncate.toInt)
+    val bodyHtml = helper.showHTML(df, limit.toInt, truncate.toInt)
     //DataMigrationFramework.SendEmail(to,bodyHtml,"","",subject)
     val yamlMapper = new ObjectMapper(new YAMLFactory());
     val inputStream = this.getClass().getClassLoader().getResourceAsStream("application-dev.yml");
@@ -213,7 +207,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
 
   }
 
-  def dataFrameToFile(filePath: String, fileFormat: String, groupByFields: String, s3SaveMode: String, df: org.apache.spark.sql.DataFrame, isS3: Boolean, secretstore: String, sparkSession: SparkSession, coalescefilecount: Integer, isSFTP: Boolean, login: String, host: String, password: String, pemFilePath: String, awsEnv: String, vaultEnv: String, rowFromJsonString: String, jsonFieldName: String): Unit = {
+  def dataFrameToFile(filePath: String, fileFormat: String, groupByFields: String, s3SaveMode: String, df: org.apache.spark.sql.DataFrame, isS3: Boolean, secretstore: String, sparkSession: SparkSession, coalescefilecount: String, isSFTP: Boolean, login: String, host: String, password: String, pemFilePath: String, awsEnv: String, vaultEnv: String, rowFromJsonString: Boolean, filePrefix: Option[String] = None, addlSparkOptions: Option[JSONObject] = None): Unit = {
 
     if (filePath == null && fileFormat == null && groupByFields == null && s3SaveMode == null && login == null && SparkSession == null) {
       throw new Exception("Platform cannot have null values")
@@ -234,7 +228,6 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     }
     sparkSession.sparkContext.hadoopConfiguration.set("spark.shuffle.service.enabled", "true")
     var groupByFieldsArray = groupByFields.split(",")
-    var filePrefix = ""
 
     var dft = sparkSession.emptyDataFrame
 
@@ -247,28 +240,39 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       }
     }
     else {
-      if (coalescefilecount < df.rdd.partitions.size)
-        dft = df.coalesce(coalescefilecount)
-      else if (coalescefilecount > df.rdd.partitions.size)
-        dft = df.repartition(coalescefilecount)
+      val coalsceFileCount_tmp = coalescefilecount.toInt
+      if (coalsceFileCount_tmp < df.rdd.partitions.size)
+        dft = df.coalesce(coalsceFileCount_tmp)
+      else if (coalsceFileCount_tmp > df.rdd.partitions.size)
+        dft = df.repartition(coalsceFileCount_tmp)
     }
-
+    var filePrefixString = filePrefix.getOrElse("")
     if (isS3) {
-      filePrefix = "s3://"
-      sparkSession.conf.set("fs.s3.connection.maximum", 100)
+      val s3Prefix = if (sparkSession.sparkContext.master == "local[*]") "s3a" else "s3"
+      filePrefixString = filePrefix.getOrElse(s3Prefix + "://")
+      sparkSession.conf.set("fs." + s3Prefix + ".connection.maximum", 100)
+      val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
+      hadoopConf.set("fs." + s3Prefix + ".fast.upload", "true")
     }
-    if (isSFTP) {
 
+    var sparkOptions: Map[String, String] = Map.empty[String, String]
+
+    if (isSFTP) {
+      sparkOptions = sparkOptions ++ Map(
+        "host" -> host,
+        "username" -> login,
+        (if (pemFilePath == "") "password" else "pem") -> (if (pemFilePath == "") password else pemFilePath),
+        "fileType" -> fileFormat
+      )
+      if (!addlSparkOptions.isEmpty) {
+        sparkOptions = sparkOptions ++ jsonObjectPropertiesToMap(addlSparkOptions.get)
+      }
       df.write.
         format("com.springml.spark.sftp").
-        option("host", host).
-        option("username", login).
-        option( if (pemFilePath == "")  "password" else "pem", if (pemFilePath == "")  password else pemFilePath).
-        option("fileType", fileFormat).
+        options(sparkOptions).
         save(filePath)
 
-      df.show()
-    } else if (rowFromJsonString.toBoolean) {
+    } else if (rowFromJsonString) {
 
       df.foreachPartition((partition: Iterator[Row]) => {
 
@@ -278,7 +282,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
         )
         if (!partitionList.isEmpty) {
           val conf: Configuration = new Configuration
-          val path_string = filePrefix + filePath + "/" + UUID.randomUUID().toString + ".json"
+          val path_string = filePrefixString + filePath + "/" + UUID.randomUUID().toString + ".json"
           val dest: Path = new Path(path_string)
           val fs: FileSystem = dest.getFileSystem(conf)
           val out: FSDataOutputStream = fs.create(dest, true)
@@ -289,82 +293,52 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       })
     }
     else {
-      if (fileFormat == "json") {
-        if (groupByFields == "") {
+      if (!filePath.startsWith("/datapull-opensource/logs/"))
+        dft.printSchema()
+      sparkOptions = sparkOptions ++ Map(
+        "header" -> "true",
+        "path" -> s"$filePrefixString$filePath"
+      )
+      if (!addlSparkOptions.isEmpty) {
+        sparkOptions = sparkOptions ++ jsonObjectPropertiesToMap(addlSparkOptions.get)
+      }
+      if (dft.isStreaming) {
+        var dfWriter = dft.writeStream
+          .format(fileFormat)
+          .options(sparkOptions)
+        if (groupByFields != "") {
+          dfWriter = dfWriter.partitionBy(groupByFieldsArray: _*)
+        }
 
-          dft
-            .write
-            .format("json")
-            .mode(SaveMode.valueOf(s3SaveMode)).json(s"$filePrefix$filePath")
-        } else {
-          dft
-            .write
-            .format("json")
-            .partitionBy(groupByFieldsArray: _*)
-            .mode(SaveMode.valueOf(s3SaveMode)).json(s"$filePrefix$filePath")
+        dfWriter
+          .start()
+      } else {
+        var dfWriter = dft.write
+          .mode(SaveMode.valueOf(s3SaveMode))
+          .format(fileFormat)
+          .options(sparkOptions)
+        if (groupByFields != "") {
+          dfWriter = dfWriter.partitionBy(groupByFieldsArray: _*)
         }
-      } else if (fileFormat == "csv") {
-        if (groupByFields == "") {
-          dft
-            .write
-            .option("header", "true")
-            .mode(SaveMode.valueOf(s3SaveMode))
-            .csv(s"$filePrefix$filePath")
+        if (fileFormat == "json") {
+          dfWriter.json(s"$filePrefixString$filePath")
+        } else if (fileFormat == "csv") {
+          dfWriter.csv(s"$filePrefixString$filePath")
+        } else if (fileFormat == "avro") {
+          dfWriter.save(s"$filePrefixString$filePath")
+        } else if (fileFormat == "orc") {
+          dfWriter.orc(s"$filePrefixString$filePath")
+        } else if (fileFormat == "sequencefile") {
+          dft.toJSON.rdd.zipWithIndex.map { case (v, i) => (i, v) }.saveAsSequenceFile(s"$filePrefixString$filePath", Some(classOf[org.apache.hadoop.io.compress.DefaultCodec]))
+        } else if (fileFormat == "sequencefilesnappy") {
+          dft.toJSON.rdd.zipWithIndex.map { case (v, i) => (i, v) }.saveAsSequenceFile(s"$filePrefixString$filePath", Some(classOf[org.apache.hadoop.io.compress.SnappyCodec]))
+        } else if (fileFormat == "sequencefiledeflate") {
+          dft.toJSON.rdd.zipWithIndex.map { case (v, i) => (i, v) }.saveAsSequenceFile(s"$filePrefixString$filePath", Some(classOf[org.apache.hadoop.io.compress.DeflateCodec]))
         } else {
-          dft
-            .write
-            .partitionBy(groupByFieldsArray: _*)
-            .option("header", "true")
-            .mode(SaveMode.valueOf(s3SaveMode))
-            .csv(s"$filePrefix$filePath")
-        }
-      } else if (fileFormat == "avro") {
-        if (groupByFields == "") {
-          dft
-            .write
-            .format("avro")
-            .option("header", "true")
-            .mode(SaveMode.valueOf(s3SaveMode))
-            .save(s"$filePrefix$filePath")
-        } else {
-          dft
-            .write
-            .format("avro")
-            .partitionBy(groupByFieldsArray: _*)
-            .option("header", "true")
-            .mode(SaveMode.valueOf(s3SaveMode))
-            .save(s"$filePrefix$filePath")
-        }
-      } else if (fileFormat == "orc") {
-        if (groupByFields == "") {
-          dft
-            .write
-            .option("header", "true")
-            .mode(SaveMode.valueOf(s3SaveMode))
-            .orc(s"$filePrefix$filePath")
-        } else {
-          dft
-            .write
-            .partitionBy(groupByFieldsArray: _*)
-            .option("header", "true")
-            .mode(SaveMode.valueOf(s3SaveMode))
-            .orc(s"$filePrefix$filePath")
+          //parquet
+          dfWriter.parquet(s"$filePrefixString$filePath")
         }
       }
-      else {
-        //parquet
-        if (groupByFields == "") {
-          Option(dft
-            .write
-            .mode(SaveMode.valueOf(s3SaveMode)).parquet(s"$filePrefix$filePath"))
-        } else {
-          Option(dft
-            .write
-            .partitionBy(groupByFieldsArray: _*)
-            .mode(SaveMode.valueOf(s3SaveMode)).parquet(s"$filePrefix$filePath"))
-        }
-      }
-
     }
   }
 
@@ -414,7 +388,6 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       } while (result.isTruncated)
 
       val destParts = destArray.map(_.split("/")).filter(x => x.length > destPathLength && !x.contains("_SUCCESS")).map(_ (destPathLength)).distinct.toArray
-      destParts.foreach(x => println(s"TEST Dest Parts: $x"))
 
       sourceParts.foreach { x =>
         if (destParts contains x) {
@@ -563,44 +536,8 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       .save()
   }
 
-  def dataFrameToNeo4j(df: org.apache.spark.sql.DataFrame, cluster: String, login: String, password: String, awsEnv: String, vaultEnv: String, node1_label: String, node1_keys: List[String], node1_nonKeys: List[String], node2_label: String, node2_keys: List[String], node2_nonKeys: List[String], relation_label: String, batchSize: Int,
-                       node1_createOrMerge: String,
-                       node1_createNodeKeyConstraint: Boolean,
-                       node2_createOrMerge: String,
-                       node2_createNodeKeyConstraint: Boolean,
-                       relation_createOrMerge: String, secretStore: String, sparkSession: org.apache.spark.sql.SparkSession): Unit = {
-    val consul = new Consul(cluster, appConfig)
-    var clusterName = cluster
-    if (consul.IsConsulDNSName()) {
-      clusterName = consul.serviceName
-    }
-    //if password isn't set, attempt to get from security.Vault
-    var vaultPassword = password
-    var vaultLogin = login
-    if (vaultPassword == "") {
-      val secretService = new SecretService(secretStore, appConfig)
-      val vaultCreds = secretService.getSecret(awsEnv, clusterName, login, vaultEnv)
-      vaultLogin = vaultCreds("username")
-      vaultPassword = vaultCreds("password")
-    }
 
-    if (node1_label != "" && (!node1_keys.isEmpty)) {
-      val neo4j = new Neo4j()
-      neo4j.writeNode(df, cluster, vaultLogin, vaultPassword, node1_label, node1_keys, node1_nonKeys, sparkSession, batchSize, node1_createNodeKeyConstraint, node1_createOrMerge)
-
-      if (node2_label != null && node2_label != "" && (!node2_keys.isEmpty)) {
-        val neo4j = new Neo4j()
-        neo4j.writeNode(df, cluster, vaultLogin, vaultPassword, node2_label, node2_keys, node2_nonKeys, sparkSession, batchSize, node2_createNodeKeyConstraint, node2_createOrMerge)
-
-        if (relation_label != null) {
-          neo4j.writeRelation(df, cluster, vaultLogin, vaultPassword, node1_label, node1_keys, node2_label, node2_keys, relation_label, sparkSession, batchSize, relation_createOrMerge)
-        }
-      }
-    }
-  }
-
-  def dataFrameToElastic(awsEnv: String, cluster: String, port: String, index: String, nodetype: String, version: String, login: String, password: String, local_dc: String, addlSparkOptions: JSONObject, df: org.apache.spark.sql.DataFrame, reportbodyHtml: StringBuilder, vaultEnv: String, saveMode: String, mappingId: String, flag: String, secretStore: String, sparkSession: org.apache.spark.sql.SparkSession): Unit = {
-
+  def dataFrameToElastic(awsEnv: String, cluster: String, port: Int, index: String, nodetype: Option[String] = None, version: String, login: String, password: String, local_dc: String, addlESOptions: Option[JSONObject] = None, df: org.apache.spark.sql.DataFrame, vaultEnv: String, saveMode: String, mappingId: String, flag: String, secretStore: String, sparkSession: org.apache.spark.sql.SparkSession): Unit = {
 
     val consul = new Consul(cluster, appConfig)
     var clusterName = cluster
@@ -619,27 +556,30 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       vaultPassword = vaultCreds("password")
     }
 
-    var config = Map("es.nodes" -> clusterNodes,
-      "es.port" -> port,
+    var esOptions = Map("es.nodes" -> clusterNodes,
+      "es.port" -> port.toString,
       "es.clustername" -> clusterName,
       "es.net.http.auth.user" -> vaultLogin,
       "es.net.http.auth.pass" -> vaultPassword,
       "es.write.operation" -> saveMode,
       "es.nodes.wan.only" -> "true",
-      "es.resource" -> s"$index/$nodetype",
+      "es.resource" -> s"$index/${nodetype.getOrElse("")}",
       "es.internal.es.version" -> version)
 
-
     if (mappingId != null)
-      config = config ++ Map("es.mapping.id" -> mappingId)
+      esOptions = esOptions ++ Map("es.mapping.id" -> mappingId)
+
+    if (!addlESOptions.isEmpty) {
+      esOptions = esOptions ++ jsonObjectPropertiesToMap(addlESOptions.get)
+    }
 
     if (flag == "false") {
-      df.saveToEs(config)
+      df.saveToEs(esOptions)
     }
 
   }
 
-  def ElasticToDataframe(awsEnv: String, cluster: String, port: String, index: String, nodetype: String, version: String, login: String, password: String, vaultEnv: String, secretStore: String, sparkSession: org.apache.spark.sql.SparkSession): org.apache.spark.sql.DataFrame = {
+  def ElasticToDataframe(awsEnv: String, cluster: String, port: Int, index: String, nodetype: Option[String] = None, version: String, login: String, password: String, vaultEnv: String, secretStore: String, sparkSession: org.apache.spark.sql.SparkSession, addlESOptions: Option[JSONObject] = None): org.apache.spark.sql.DataFrame = {
 
 
     val consul = new Consul(cluster, appConfig)
@@ -659,17 +599,25 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       vaultPassword = vaultCreds("password")
     }
 
+    var esOptions = Map("es.nodes" -> clusterNodes,
+      "es.port" -> port.toString,
+      "es.index.auto.create" -> "true",
+      "es.nodes.wan.only" -> "true",
+      "es.clustername" -> clusterName,
+      "es.net.http.auth.user" -> vaultLogin,
+      "es.net.http.auth.pass" -> vaultPassword,
+      "es.internal.es.version" -> version,
+      "es.resource" -> s"$index/${nodetype.getOrElse("")}"
+    )
+
+    if (!addlESOptions.isEmpty) {
+      esOptions = esOptions ++ jsonObjectPropertiesToMap(addlESOptions.get)
+    }
+
     val df = sparkSession
       .read.format("org.elasticsearch.spark.sql")
-      .option("es.nodes", clusterNodes)
-      .option("es.port", port)
-      .option("es.index.auto.create", "true")
-      .option("es.nodes.wan.only", "true")
-      .option("es.clustername", clusterName)
-      .option("es.net.http.auth.user", vaultLogin)
-      .option("es.net.http.auth.pass", vaultPassword)
-      .option("es.internal.es.version", version)
-      .load("" + index + "/" + nodetype)
+      .options(esOptions)
+      .load(index + "/" + nodetype.getOrElse(""))
 
     df
   }
@@ -766,7 +714,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
         val cConnect = CassandraConnector(conf)
         cConnect.withSessionDo(session => session.execute(cql_command))
       } catch {
-        case e: TruncateException =>
+        case e: Exception =>
           val sw = new StringWriter
           e.printStackTrace()
           e.printStackTrace(new PrintWriter(sw))
@@ -780,7 +728,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     }
   }
 
-  def elasticRunCommand(awsEnv: String, cluster: String, port: String, index: String, login: String, password: String, local_dc: String, addlSparkOptions: JSONObject, curlcommand: String, reportbodyHtml: StringBuilder, vaultEnv: String, secretStore: String, ignoreTruncateException: Boolean = true): Unit = {
+  def elasticRunCommand(awsEnv: String, cluster: String, port: Int, login: String, password: String, curlcommand: String, vaultEnv: String, secretStore: String): Unit = {
 
     //if password isn't set, attempt to get from Vault
     var vaultPassword = password
@@ -796,9 +744,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     var statement: Statement = null
 
     try {
-
-      val service = vaultPassword + ":" + vaultLogin + "@" + cluster + ":" + port + "/"
-      var cmd_withcreds = curlcommand.replace("://", "://" + login + ":" + password + "@") //.replace("\"", "\\\"");
+      val cmd_withcreds = curlcommand.replace("://", "://" + vaultLogin + ":" + vaultPassword + "@")
 
       val fileName = pipeline + ".sh"
       import java.io.PrintWriter
@@ -814,10 +760,11 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       val result = "./" + fileName !!
 
       println("command result = " + result + " pipeline name = " + fileName + " pipeline = " + pipeline);
-
       new File(fileName).delete()
-
-      val tokens: Array[String] = cmd_withcreds.split(" ");
+      var jsonResult = new JSONObject(result)
+      if (jsonResult.has("error")) {
+        throw new Exception(result)
+      }
     } catch {
       case e: Throwable => e.printStackTrace
         throw (e)
@@ -830,7 +777,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     }
   }
 
-  def mongodbToDataFrame(awsEnv: String, cluster: String, overrideconnector: String, database: String, authenticationDatabase: String, collection: String, login: String, password: String, sparkSession: org.apache.spark.sql.SparkSession, vaultEnv: String, addlSparkOptions: JSONObject, secretStore: String, authenticationEnabled: String, tmpFileLocation: String, sampleSize: String): org.apache.spark.sql.DataFrame = {
+  def mongodbToDataFrame(awsEnv: String, cluster: String, overrideconnector: String, database: String, authenticationDatabase: String, collection: String, login: String, password: String, sparkSession: org.apache.spark.sql.SparkSession, vaultEnv: String, addlSparkOptions: JSONObject, secretStore: String, authenticationEnabled: String, tmpFileLocation: String, sampleSize: String, sslEnabled: String): org.apache.spark.sql.DataFrame = {
     val consul = new Consul(cluster, appConfig)
     var clusterName = cluster
     var clusterNodes = cluster
@@ -839,7 +786,6 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       clusterNodes = clusterNodes + "," + consul.ipAddresses.mkString(",") + ":27017"
     }
     var uri: String = null
-    val helper = new Helper(appConfig)
     var vaultLogin: String = null
     var vaultPassword: String = null
     sparkSession.sparkContext.hadoopConfiguration.set("spark.shuffle.service.enabled", "true")
@@ -854,7 +800,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
         vaultPassword = vaultCreds("password")
       }
     }
-    uri = helper.buildMongoURI(vaultLogin, vaultPassword, cluster, null, authenticationDatabase, database, collection, authenticationEnabled.toBoolean)
+    uri = helper.buildMongoURI(vaultLogin, vaultPassword, cluster, null, authenticationDatabase, database, collection, authenticationEnabled.toBoolean, sslEnabled)
     if (overrideconnector.toBoolean) {
       var mongoClient: MongoClient = new MongoClient(new MongoClientURI(uri))
       var mdatabase: MongoDatabase = mongoClient.getDatabase("" + database);
@@ -865,6 +811,8 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       val tmp_location = tmpFileLocation
       var df_temp = sparkSession.emptyDataFrame
       var df_big = sparkSession.emptyDataFrame
+      var part = 1
+      var tmp_location_local = tmp_location + "/partition=" + part + "/"
 
       import sparkSession.implicits._
       while (cur.hasNext()) {
@@ -872,12 +820,14 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
         list += (doc.toJson)
         if (list.length >= 20000) {
           df_temp = list.toList.toDF("jsonfield")
-          df_temp.write.mode(SaveMode.Append).json(tmp_location)
+          df_temp.write.mode(SaveMode.Append).json(tmp_location_local)
           list.clear()
+          part += 1
+          tmp_location_local = tmp_location + "/partition=" + part + "/"
         }
       }
       df_temp = list.toList.toDF("jsonfield")
-      df_temp.write.mode(SaveMode.Append).json(tmp_location)
+      df_temp.write.mode(SaveMode.Append).json(tmp_location_local)
       list.clear()
       df_big = sparkSession.read.json(tmp_location).withColumnRenamed("value", "jsonfield")
       return df_big
@@ -895,7 +845,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     }
   }
 
-  def dataFrameToMongodb(awsEnv: String, cluster: String, database: String, authenticationDatabase: String, collection: String, login: String, password: String, replicaset: String, replaceDocuments: String, ordered: String, df: org.apache.spark.sql.DataFrame, sparkSession: org.apache.spark.sql.SparkSession, documentfromjsonfield: String, jsonfield: String, vaultEnv: String, secretStore: String, addlSparkOptions: JSONObject, maxBatchSize: String, authenticationEnabled: Boolean): Unit = {
+  def dataFrameToMongodb(awsEnv: String, cluster: String, database: String, authenticationDatabase: String, collection: String, login: String, password: String, replicaset: String, replaceDocuments: String, ordered: String, df: org.apache.spark.sql.DataFrame, sparkSession: org.apache.spark.sql.SparkSession, documentfromjsonfield: String, jsonfield: String, vaultEnv: String, secretStore: String, addlSparkOptions: JSONObject, maxBatchSize: String, authenticationEnabled: Boolean, sslEnabled: String): Unit = {
 
     val consul = new Consul(cluster, appConfig)
     var clusterName = cluster
@@ -903,7 +853,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       clusterName = consul.serviceName
     }
     var uri: String = null
-    val helper = new Helper(appConfig)
+
     var vaultLogin: String = null
     var vaultPassword: String = null
     //if password isn't set, attempt to get from security.Vault
@@ -917,7 +867,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
         vaultPassword = vaultCreds("password")
       }
     }
-    uri = helper.buildMongoURI(vaultLogin, vaultPassword, cluster, replicaset, authenticationDatabase, database, collection, authenticationEnabled)
+    uri = helper.buildMongoURI(vaultLogin, vaultPassword, cluster, replicaset, authenticationDatabase, database, collection, authenticationEnabled, sslEnabled)
 
     var sparkOptions = Map("uri" -> uri, "replaceDocument" -> replaceDocuments.toString, "ordered" -> ordered.toString)
     if (maxBatchSize != null)
@@ -942,7 +892,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     }
   }
 
-  def mongoRunCommand(awsEnv: String, cluster: String, database: String, authenticationDatabase: String, collection: String, login: String, password: String, vaultEnv: String, addlSparkOptions: JSONObject, runCommand: String, secretStore: String, authenticationEnabled: Boolean): Unit = {
+  def mongoRunCommand(awsEnv: String, cluster: String, database: String, authenticationDatabase: String, collection: String, login: String, password: String, vaultEnv: String, addlSparkOptions: JSONObject, runCommand: String, secretStore: String, authenticationEnabled: Boolean, sslEnabled: String): Unit = {
 
     val consul = new Consul(cluster, appConfig)
     var clusterName = cluster
@@ -951,9 +901,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       clusterName = consul.serviceName
       clusterNodes = clusterNodes + "," + consul.ipAddresses.mkString(",")
     }
-    var uri: MongoClientURI = null
-    //if password isn't set, attempt to get from security.Vault
-    val helper = new Helper(appConfig)
+
     var vaultLogin: String = null
     var vaultPassword: String = null
     //if password isn't set, attempt to get from security.Vault
@@ -967,149 +915,124 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
         vaultPassword = vaultCreds("password")
       }
     }
-    uri = helper.buildMongoURI(vaultLogin, vaultPassword, cluster, null, authenticationDatabase, database, collection, authenticationEnabled).asInstanceOf[MongoClientURI]
+
+
+    val uri = new MongoClientURI(helper.buildMongoURI(vaultLogin, vaultPassword, cluster, null, authenticationDatabase, database, collection, authenticationEnabled, sslEnabled))
     val mongoClient = new MongoClient(uri)
     val data = mongoClient.getDatabase(database)
+
     val response = data.runCommand(org.bson.Document.parse(runCommand))
   }
 
-  def kafkaToDataFrame(bootstrapServers: String, topic: String, offset: String, schemaRegistries: String, keyDeserializer: String, deSerializer: String, s3Location: String, groupId: String, requiredOnlyValue: String, payloadColumnName: String, migrationId: String, jobId: String, sparkSession: org.apache.spark.sql.SparkSession, s3TempFolderDeletionError: mutable.StringBuilder): org.apache.spark.sql.DataFrame = {
+  def kafkaToDataFrame(spark: SparkSession,
+                       kafkaBroker: String,
+                       topic: String,
+                       schemaRegistryUrl: String,
+                       valueSchemaVersion: Option[Int] = None,
+                       valueSubjectNamingStrategy: String = "TopicNameStrategy" /*other options are RecordNameStrategy, TopicRecordNameStrategy*/ ,
+                       valueSubjectRecordName: Option[String] = None,
+                       valueSubjectRecordNamespace: Option[String] = None,
+                       keySchemaVersion: Option[Int] = None,
+                       keySubjectNamingStrategy: String = "TopicNameStrategy" /*other options are RecordNameStrategy, TopicRecordNameStrategy*/ ,
+                       keySubjectRecordName: Option[String] = None,
+                       keySubjectRecordNamespace: Option[String] = None,
+                       keyStorePath: Option[String] = None,
+                       trustStorePath: Option[String] = None,
+                       keyStorePassword: Option[String] = None,
+                       trustStorePassword: Option[String] = None,
+                       keyPassword: Option[String] = None,
+                       keyFormat: String = "string",
+                       valueFormat: String = "avro",
+                       addlSparkOptions: Option[JSONObject] = None,
+                       isStream: Boolean = false,
+                       streamWatermarkField: String = "timestamp",
+                       streamWatermarkDelay: Option[String] = None,
+                       kafkaConnectMongodbOptions: Option[JSONObject] = None
+                      ): DataFrame = {
+    var sparkOptions: Map[String, String] = helper.buildSecureKafkaProperties(keyStorePath = keyStorePath, trustStorePath = trustStorePath, keyStorePassword = keyStorePassword, trustStorePassword = trustStorePassword, keyPassword = keyPassword)
 
-    var groupId_temp = groupId
+    sparkOptions = sparkOptions ++ Map("kafka.bootstrap.servers" -> kafkaBroker, "subscribe" -> topic, "schema.registry.url" -> schemaRegistryUrl, "max.poll.records" -> "500", "session.timeout.ms" -> "120000")
 
-    if (groupId_temp == null)
-      groupId_temp = UUID.randomUUID().toString + "_" + topic
+    if (!addlSparkOptions.isEmpty) {
+      sparkOptions = sparkOptions ++ jsonObjectPropertiesToMap(addlSparkOptions.get)
+    }
+    var df = spark.emptyDataFrame
+    if (isStream) {
+      df = spark
+        .readStream
+        .format("kafka")
+        .options(sparkOptions)
+        .load()
+    } else {
+      df = spark
+        .read
+        .format("kafka")
+        .options(sparkOptions)
+        .load()
+    }
+    var fromValueAvroConfig: FromAvroConfig = null
+    if (valueFormat == "avro") {
+      fromValueAvroConfig = helper.GetFromAvroConfig(
+        topic = topic,
+        schemaRegistryUrl = schemaRegistryUrl,
+        schemaVersion = valueSchemaVersion,
+        isKey = false,
+        subjectNamingStrategy = valueSubjectNamingStrategy,
+        subjectRecordName = valueSubjectRecordName,
+        subjectRecordNamespace = valueSubjectRecordNamespace,
+        sslSettings = sparkOptions
+      )
+    }
+    var fromKeyAvroConfig: FromAvroConfig = null
+    if (keyFormat == "avro") {
+      fromKeyAvroConfig = helper.GetFromAvroConfig(
+        topic = topic,
+        schemaRegistryUrl = schemaRegistryUrl,
+        schemaVersion = keySchemaVersion,
+        isKey = true,
+        subjectNamingStrategy = keySubjectNamingStrategy,
+        subjectRecordName = keySubjectRecordName,
+        subjectRecordNamespace = keySubjectRecordNamespace,
+        sslSettings = sparkOptions
+      )
+    }
+    var dft = df
+      .withColumnRenamed("key", "keyBinary")
+      .withColumnRenamed("value", "valueBinary")
+    dft = dft
+      .withColumn("key", keyFormat match {
+        case "avro" => from_avro(dft.col("keyBinary"), fromKeyAvroConfig)
+        case _ => dft.col("keyBinary").cast("String")
+      })
+      .withColumn("value", valueFormat match {
+        case "avro" => from_avro(dft.col("valueBinary"), fromValueAvroConfig)
+        case _ => dft.col("valueBinary").cast("String")
+      })
+    dft = dft
+      .drop("keyBinary")
+      .drop("valueBinary")
+    dft = ProcessKafkaConnectMongodbOptions(
+      spark = spark,
+      df = dft,
+      kafkaConnectMongodbOptions = kafkaConnectMongodbOptions
+    )
+    dft.printSchema()
+    if (isStream && !streamWatermarkDelay.isEmpty) {
+      dft = dft.withWatermark(streamWatermarkField, streamWatermarkDelay.get)
+    }
+    dft
+  }
 
-    println(groupId_temp)
-
-    val props = new Properties()
-    props.put("bootstrap.servers", bootstrapServers)
-    props.put("key.deserializer", keyDeserializer)
-    props.put("value.deserializer", deSerializer)
-    props.put("group.id", groupId_temp)
-    props.put("auto.offset.reset", offset)
-    props.put("schema.registry.url", schemaRegistries)
-    props.put("max.poll.records", "500")
-    props.put("session.timeout.ms", "120000")
-
-    val consumer = new KafkaConsumer[String, GenericData.Record](props)
-
-    consumer.subscribe(util.Collections.singletonList(topic))
-    var list = new ListBuffer[String]()
-
-    var tmp_s3: String = null
-
-    var poll = 0
-    var df_temp: org.apache.spark.sql.DataFrame = null
-    var df: org.apache.spark.sql.DataFrame = null
-    var count = 0
-
-    tmp_s3 = s3Location + "/migrationId=" + migrationId + "/jobId=" + jobId
-
-    val currentTime_Unix = System.currentTimeMillis()
-
-    breakable {
-      while (true) {
-
-        val consumerRecords = consumer.poll(200)
-
-        val count_tmp = consumerRecords.count()
-
-        count += count_tmp
-
-        if (count_tmp == 0) {
-
-          println("didn't find any records, waiting...")
-
-          Thread.sleep(10000)
-
-          if (poll >= 400) {
-            df_temp = sparkSession.read.json(sparkSession.sparkContext.parallelize(list))
-            df_temp.write.mode(SaveMode.Append).json(tmp_s3)
-            list.clear()
-
-            println("breaking out of the loop after required retries at:" + Instant.now())
-
-            break()
-          }
-
-          poll += 1
-        }
-
-        if (count > 0) {
-
-          for (consumerRecord <- consumerRecords.asScala) {
-
-            if (consumerRecord.timestamp() > currentTime_Unix) {
-              df_temp = sparkSession.read.json(sparkSession.sparkContext.parallelize(list))
-              df_temp.write.mode(SaveMode.Append).json(tmp_s3)
-              list.clear()
-
-              println("breaking out of the loop after reading all the messages till the job started and ending at:" + Instant.now())
-
-              break()
-            }
-
-
-            if (requiredOnlyValue == "true") {
-
-              list += consumerRecord.value().get(payloadColumnName).toString
-
-            }
-            else {
-
-              val fullJSONObject: JSONObject = new JSONObject()
-              var key: JSONObject = null
-              var value: JSONObject = null
-              var valueString: String = null
-
-              var keyString: String = null
-
-              valueString = consumerRecord.value().toString
-              keyString = consumerRecord.key().toString
-
-              if (isJSONString(keyString)) {
-                key = new JSONObject(keyString)
-                fullJSONObject.put("key", key)
-              }
-              else {
-                fullJSONObject.put("key", consumerRecord.key())
-              }
-
-              value = new JSONObject(valueString)
-              if (value != null && value.toString != "") {
-
-                fullJSONObject.put("value", value)
-              }
-              list += fullJSONObject.toString()
-
-            }
-
-            if (list.length >= 80000) {
-              df_temp = sparkSession.read.json(sparkSession.sparkContext.parallelize(list))
-              println("writing to s3 after reaching the block size and time now is:" + Instant.now())
-              df_temp.write.mode(SaveMode.Append).json(tmp_s3)
-              list.clear()
-              count = 0
-            }
-
-          }
-
-        }
+  private def ProcessKafkaConnectMongodbOptions(spark: SparkSession, df: DataFrame, kafkaConnectMongodbOptions: Option[JSONObject] = None): DataFrame = {
+    var outputDf = df
+    if (!kafkaConnectMongodbOptions.isEmpty) {
+      if (kafkaConnectMongodbOptions.get.has("documentschema")) {
+        val documentSchema = kafkaConnectMongodbOptions.get.optString("documentschema")
+        outputDf.createOrReplaceTempView("df")
+        outputDf = spark.sql("SELECT \n        df2.topic, df2.partition, df2.offset, ifnull(to_timestamp(from_unixtime(df2.payload.clusterTime.`$timestamp`.t)), df2.timestamp) as timestamp, df2.payload.fullDocument._id as key, struct(df2.payload.fullDocument.*) as value \nFROM  (\n        select df.topic, df.partition, df.offset, df.timestamp,\n                from_json (\n                        from_json (\n                                value,\n                                'struct<payload:string,schema:struct<optional:boolean,type:string>>'\n                        ).payload , \n                        'struct<\n                                operationType:string,\n                                clusterTime:struct<`$timestamp`:struct<t:long,i:long>>,\n                                fullDocument:struct<" + documentSchema + ">,\n                                ns:struct<coll:string,db:string>\n                        >'\n                ) as payload from df\n) df2")
       }
     }
-
-    df = sparkSession.read.json(tmp_s3)
-    try {
-      s3RemoveDirectoryUsingS3Client(tmp_s3)
-      println(s"Deleted temporary S3 folder - $tmp_s3")
-    } catch {
-      case e: Throwable => e.printStackTrace
-        println(s"Unable to delete temporary S3 folder - $tmp_s3")
-        s3TempFolderDeletionError.append(s"<b>*</b> Unable to delete S3 folder - $tmp_s3")
-    }
-
-    df
+    outputDf
   }
 
   def isJSONString(jsonString: String): Boolean = {
@@ -1126,101 +1049,82 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
 
   def manOf[T: Manifest](t: T): Manifest[T] = manifest[T]
 
-  def dataFrameToKafka(
-                        bootstrapServers: String,
-                        schemaRegistries: String,
-                        topic: String,
-                        keyField: String,
-                        keyFormat: String,
-                        addlSparkOptions: JSONObject,
-                        valueField: String,
-                        headerField: String,
-                        df: org.apache.spark.sql.DataFrame): Unit = {
-    val commonRegistryConfig = Map(
-      SchemaManager.PARAM_SCHEMA_REGISTRY_TOPIC -> topic,
-      SchemaManager.PARAM_SCHEMA_REGISTRY_URL -> schemaRegistries
-    )
-    val valueRegistryConfig = commonRegistryConfig ++ Map(
-      SchemaManager.PARAM_VALUE_SCHEMA_NAMING_STRATEGY -> "topic.name"
-      //, SchemaManager.PARAM_VALUE_SCHEMA_ID -> "latest"
-    )
-    val keyRegistryConfig = commonRegistryConfig ++ Map(
-      SchemaManager.PARAM_KEY_SCHEMA_NAMING_STRATEGY -> "topic.name"
-      //, SchemaManager.PARAM_VALUE_SCHEMA_ID -> "latest"
-    )
+  def dataFrameToKafka(spark: SparkSession,
+                       df: DataFrame,
+                       valueField: String,
+                       topic: String,
+                       kafkaBroker: String,
+                       schemaRegistryUrl: String,
+                       valueSchemaVersion: Option[Int] = None,
+                       valueSubjectNamingStrategy: String = "TopicNameStrategy" /*other options are RecordNameStrategy, TopicRecordNameStrategy*/ ,
+                       valueSubjectRecordName: Option[String] = None,
+                       valueSubjectRecordNamespace: Option[String] = None,
+                       keyField: Option[String] = None,
+                       keySchemaVersion: Option[Int] = None,
+                       keySubjectNamingStrategy: String = "TopicNameStrategy" /*other options are RecordNameStrategy, TopicRecordNameStrategy*/ ,
+                       keySubjectRecordName: Option[String] = None,
+                       keySubjectRecordNamespace: Option[String] = None,
+                       headerField: Option[String] = None,
+                       keyStorePath: Option[String] = None,
+                       trustStorePath: Option[String] = None,
+                       keyStorePassword: Option[String] = None,
+                       trustStorePassword: Option[String] = None,
+                       keyPassword: Option[String] = None,
+                       keyFormat: String,
+                       valueFormat: String,
+                       isStream: Boolean = false,
+                       addlSparkOptions: Option[JSONObject] = None
+                      ): Unit = {
 
-    var allColumns = struct(df.columns.head, df.columns.tail: _*)
+    var dfavro = spark.emptyDataFrame
 
-    if (valueField != null) {
-      allColumns = df.col(valueField)
+    var sparkOptions: Map[String, String] = helper.buildSecureKafkaProperties(keyStorePath = keyStorePath, trustStorePath = trustStorePath, keyStorePassword = keyStorePassword, trustStorePassword = trustStorePassword, keyPassword = keyPassword)
+
+    sparkOptions = sparkOptions ++ Map("kafka.bootstrap.servers" -> kafkaBroker, "topic" -> topic, "includeHeaders" -> (!headerField.isEmpty).toString)
+
+    if (!addlSparkOptions.isEmpty) {
+      sparkOptions = sparkOptions ++ jsonObjectPropertiesToMap(addlSparkOptions.get)
     }
 
-    val isHeaderPresent = df.columns.contains("headers")
-
-    if (headerField != null) {
-      df.withColumn("headers", df.col(headerField))
-
-    } else if (!isHeaderPresent) {
-      import org.apache.spark.sql.functions.{lit, struct}
-      df.withColumn("headers", struct(lit(System.currentTimeMillis()) as 'time))
+    val valueFieldCol = df.col(valueField)
+    val valueAvroConfig = helper.GetToAvroConfig(topic = topic, schemaRegistryUrl = schemaRegistryUrl, df = df, columnName = valueField, schemaVersion = valueSchemaVersion, isKey = false, subjectNamingStrategy = valueSubjectNamingStrategy, subjectRecordName = valueSubjectRecordName, subjectRecordNamespace = valueSubjectRecordNamespace, sslSettings = sparkOptions)
+    var columnsToSelect = Seq((valueFormat match {
+      case "avro" => to_avro(valueFieldCol, valueAvroConfig)
+      case _ => valueFieldCol
+    }) as 'value)
+    if (!keyField.isEmpty) {
+      val keyFieldCol = df.col(keyField.get)
+      val keyAvroConfig = helper.GetToAvroConfig(topic = topic, schemaRegistryUrl = schemaRegistryUrl, df = df, columnName = keyField.get, schemaVersion = keySchemaVersion, isKey = true, subjectNamingStrategy = keySubjectNamingStrategy, subjectRecordName = keySubjectRecordName, subjectRecordNamespace = keySubjectRecordNamespace, sslSettings = sparkOptions)
+      columnsToSelect = columnsToSelect ++ Seq((keyFormat match {
+        case "avro" => to_avro(keyFieldCol, keyAvroConfig)
+        case _ => keyFieldCol
+      }) as 'key)
+    }
+    if (!headerField.isEmpty) {
+      columnsToSelect = columnsToSelect ++ Seq(df.col(headerField.get) as 'header)
     }
 
-    var sparkOptions = Map("kafka.bootstrap.servers" -> bootstrapServers, "includeHeaders" -> "true")
-
-    if (addlSparkOptions != null) {
-      sparkOptions = sparkOptions ++ jsonObjectPropertiesToMap(addlSparkOptions)
-    }
-    try {
-      df.select((keyFormat match {
-        case "avro" => to_confluent_avro(col(keyField), keyRegistryConfig)
-        case _ => col(keyField).cast(StringType)
-      })
-        as 'key, to_confluent_avro(allColumns, valueRegistryConfig) as 'value, df.col("headers"))
-        .write
+    dfavro = df.select(columnsToSelect: _*)
+    dfavro.printSchema()
+    if (isStream) {
+      dfavro.writeStream
         .options(sparkOptions)
-        .option("topic", topic)
+        .format("kafka")
+        .start()
+    }
+    else {
+      dfavro.write
+        .options(sparkOptions)
         .format("kafka")
         .save()
-    } catch {
-      case unknown: Exception => {
-        println(s"Unknown exception: $unknown")
-      }
     }
   }
 
-  def rdbmsToDataFrame(platform: String, awsEnv: String, server: String, database: String, table: String, login: String, password: String, sparkSession: org.apache.spark.sql.SparkSession, primarykey: String, lowerbound: String, upperbound: String, numofpartitions: String, vaultEnv: String, secretStore: String, sslEnabled: String, port: String, addlJdbcOptions: JSONObject, isWindowsAuthenticated: String, domainName: String): org.apache.spark.sql.DataFrame = {
-    var driver: String = null
-    var url: String = null
-    if (isWindowsAuthenticated.toBoolean) {
-      if (platform == "mssql") {
-        driver = "net.sourceforge.jtds.jdbc.Driver"
-        url = "jdbc:jtds:sqlserver://" + server + ":" + (if (port == null) "1433" else port) + "/" + database + ";domain=" + domainName + ";useNTLMv2=true"
-      }
-    } else {
-      if (platform == "mssql") {
-        driver = "com.microsoft.sqlserver.jdbc.SQLServerDriver"
-        url = "jdbc:sqlserver://" + server + ":" + (if (port == null) "1433" else port) + ";database=" + database
-      }
-      else if (platform == "oracle") {
-        driver = "oracle.jdbc.driver.OracleDriver"
-        url = "jdbc:oracle:thin:@//" + server + ":" + (if (port == null) "1521" else port) + "/" + database
-      }
-      else if (platform == "teradata") {
-        driver = "com.teradata.jdbc.TeraDriver"
-        val helper = new Helper(appConfig)
-        url = helper.buildTeradataURI(server, database, if (port == null) None else Some(port.toInt))
-      }
+  def rdbmsToDataFrame(platform: String, awsEnv: String, server: String, database: String, table: String, login: String, password: String, sparkSession: org.apache.spark.sql.SparkSession, primarykey: String, lowerbound: String, upperbound: String, numofpartitions: String, vaultEnv: String, secretStore: String, sslEnabled: Boolean, port: String, addlJdbcOptions: JSONObject, isWindowsAuthenticated: Boolean, domainName: String, typeForTeradata: Option[String]): org.apache.spark.sql.DataFrame = {
+    val configMap = helper.buildRdbmsURI(platform, server, port, database, isWindowsAuthenticated, domainName, typeForTeradata, sslEnabled, addlJdbcOptions: JSONObject)
+    val driver: String = configMap("driver")
+    val url: String = configMap("url")
 
-      else if (platform == "mysql") {
-        driver = "com.mysql.jdbc.Driver"
-        url = "jdbc:mysql://" + server + ":" + (if (port == null) "3306" else port) + "/" + database + "?rewriteBatchedStatements=true&cachePrepStmts=true"
-      }
-
-      else if (platform == "postgres") {
-        driver = "org.postgresql.Driver"
-        url = "jdbc:postgresql://" + server + ":" + (if (port == null) "5432" else port) + "/" + database + (if (sslEnabled == "true") "?sslmode=require" else "")
-      }
-    }
     val consul = new Consul(server, appConfig)
     var clusterName = server
     if (consul.IsConsulDNSName()) {
@@ -1274,41 +1178,10 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     }
   }
 
-  def dataFrameToRdbms(platform: String, awsEnv: String, server: String, database: String, table: String, login: String, password: String, df: org.apache.spark.sql.DataFrame, vaultEnv: String, secretStore: String, sslEnabled: String, port: String, addlJdbcOptions: JSONObject, savemode: String, isWindowsAuthenticated: String, domainName: String): Unit = {
-    var driver: String = null
-    var url: String = null
-    var dflocal = df
-    if (isWindowsAuthenticated.toBoolean) {
-      if (platform == "mssql") {
-        driver = "net.sourceforge.jtds.jdbc.Driver"
-        url = "jdbc:jtds:sqlserver://" + server + ":" + (if (port == null) "1433" else port) + "/" + database + ";domain= " + domainName + ";useNTLMv2=true"
-      }
-    } else {
-      if (platform == "mssql") {
-        driver = "com.microsoft.sqlserver.jdbc.SQLServerDriver"
-        url = "jdbc:sqlserver://" + server + ":" + (if (port == null) "1433" else port) + ";database=" + database
-      }
-      else if (platform == "oracle") {
-        driver = "oracle.jdbc.driver.OracleDriver"
-        url = "jdbc:oracle:thin:@//" + server + ":" + (if (port == null) "1521" else port) + "/" + database
-      }
-      else if (platform == "teradata") {
-        driver = "com.teradata.jdbc.TeraDriver"
-        val helper = new Helper(appConfig)
-        url = helper.buildTeradataURI(server, database, if (port == null) None else Some(port.toInt))
-        dflocal = dflocal.coalesce(1) //to prevent locking, by ensuring only there is one writer per table
-      }
-
-      else if (platform == "mysql") {
-        driver = "com.mysql.jdbc.Driver"
-        url = "jdbc:mysql://" + server + ":" + (if (port == null) "3306" else port) + "/" + database + "?rewriteBatchedStatements=true&cachePrepStmts=true"
-      }
-
-      else if (platform == "postgres") {
-        driver = "org.postgresql.Driver"
-        url = "jdbc:postgresql://" + server + ":" + (if (port == null) "5432" else port) + "/" + database + (if (sslEnabled == "true") "?sslmode=require" else "")
-      }
-    }
+  def dataFrameToRdbms(platform: String, awsEnv: String, server: String, database: String, table: String, login: String, password: String, df: org.apache.spark.sql.DataFrame, vaultEnv: String, secretStore: String, sslEnabled: Boolean = false, port: String, addlJdbcOptions: JSONObject, savemode: String, isWindowsAuthenticated: Boolean, domainName: String, typeForTeradata: Option[String] = None): Unit = {
+    val configMap = helper.buildRdbmsURI(platform, server, port, database, isWindowsAuthenticated, domainName, typeForTeradata, sslEnabled, addlJdbcOptions: JSONObject)
+    val driver: String = configMap("driver")
+    val url: String = configMap("url")
 
     val consul = new Consul(server, appConfig)
     var clusterName = server
@@ -1340,78 +1213,44 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     connectionProperties.setProperty("user", vaultLogin)
     connectionProperties.setProperty("password", vaultPassword)
     connectionProperties.setProperty("driver", driver)
-
-    dflocal.write.mode(savemode).options(jdbcOptions).jdbc(url, table, connectionProperties)
-  }
-
-  def hiveToDataFrame(cluster: String, sparkSession: org.apache.spark.sql.SparkSession, dbtable: String, username: String, fetchsize: String): org.apache.spark.sql.DataFrame = {
-
-    import org.apache.spark.sql.jdbc.JdbcDialect
-
-    val HiveDialect = new JdbcDialect {
-      override def canHandle(url: String): Boolean = url.startsWith("jdbc:hive2") || url.contains("hive2")
-
-      override def quoteIdentifier(colName: String): String = {
-        s"$colName"
-      }
-
+    var df_temp = df
+    if (platform == "teradata") {
+      df_temp = df.coalesce(1)
     }
-
-    JdbcDialects.registerDialect(HiveDialect)
-
-    val jdbcDF = sparkSession.read
-      .format("jdbc")
-      .option("url", cluster)
-      .option("dbtable", dbtable)
-      .option("username", username)
-      // .option("fetchsize", fetchsize.toInt)
-      .load()
-
-    jdbcDF
+    df_temp.write.mode(savemode).options(jdbcOptions).jdbc(url, table, connectionProperties)
   }
 
-  def dataFrameToHive(table: String, saveMode: String, df: org.apache.spark.sql.DataFrame): Unit = {
-
-    df.write
-      .mode(SaveMode.valueOf(saveMode))
-      .insertInto(table)
+  def hiveToDataFrame(sparkSession: org.apache.spark.sql.SparkSession, query: String): org.apache.spark.sql.DataFrame = {
+    sparkSession.sql(query)
   }
 
-  def rdbmsRunCommand(platform: String, awsEnv: String, server: String, port: String, sslEnabled: String, database: String, sql_command: String, login: String, password: String, vaultEnv: String, secretStore: String, isWindowsAuthenticated: String, domainName: String): Unit = {
+  def dataFrameToHive(sparkSession: SparkSession, df: org.apache.spark.sql.DataFrame, table: String, database: String, format: String, saveMode: String, partitions: Boolean): Unit = {
+    sparkSession.sql("use " + database)
+
+    if (!partitions) {
+      df.write
+        .format(format)
+        .mode(saveMode)
+        .insertInto(table)
+    } else {
+      sparkSession.sqlContext.setConf("hive.exec.dynamic.partition", "true")
+      sparkSession.sqlContext.setConf("hive.exec.dynamic.partition.mode", "nonstrict")
+
+      df.write
+        .format(format)
+        .mode(saveMode)
+        .insertInto(table)
+    }
+  }
+
+  def rdbmsRunCommand(platform: String, awsEnv: String, server: String, port: String, sslEnabled: Boolean, database: String, sql_command: String, login: String, password: String, vaultEnv: String, secretStore: String, isWindowsAuthenticated: Boolean, domainName: String, typeForTeradata: Option[String], colType: Option[String]): ResultSet = {
+
+    var resultSet:ResultSet = null
     if (sql_command != "") {
-      val helper = new Helper(appConfig)
-      var driver: String = null;
-      var url: String = null;
-      if (isWindowsAuthenticated.toBoolean) {
-        if (platform == "mssql") {
-          driver = "net.sourceforge.jtds.jdbc.Driver"
-          url = "jdbc:jtds:sqlserver://" + server + ":" + (if (port == null) "1433" else port) + "/" + database + ";domain= " + domainName + ";useNTLMv2=true"
-        }
-      } else {
-        if (platform == "mssql") {
-          driver = "com.microsoft.sqlserver.jdbc.SQLServerDriver"
-          url = "jdbc:sqlserver://" + server + ":" + (if (port == null) "1433" else port) + ";database=" + database
-        }
-        else if (platform == "oracle") {
-          driver = "oracle.jdbc.driver.OracleDriver"
-          url = "jdbc:oracle:thin:@//" + server + ":" + (if (port == null) "1521" else port) + "/" + database
-        }
-        else if (platform == "teradata") {
-          driver = "com.teradata.jdbc.TeraDriver"
-          val helper = new Helper(appConfig)
-          url = helper.buildTeradataURI(server, database, if (port == null) None else Some(port.toInt))
-        }
 
-        else if (platform == "mysql") {
-          driver = "com.mysql.jdbc.Driver"
-          url = "jdbc:mysql://" + server + ":" + (if (port == null) "3306" else port) + "/" + database + "?rewriteBatchedStatements=true&cachePrepStmts=true"
-        }
-
-        else if (platform == "postgres") {
-          driver = "org.postgresql.Driver"
-          url = "jdbc:postgresql://" + server + ":" + (if (port == null) "5432" else port) + "/" + database + (if (sslEnabled == "true") "?sslmode=require" else "")
-        }
-      }
+      val configMap = helper.buildRdbmsURI(platform, server, port, database, isWindowsAuthenticated, domainName, typeForTeradata, sslEnabled, null)
+      val driver: String = configMap("driver")
+      val url: String = configMap("url")
 
       val consul = new Consul(server, appConfig)
       var clusterName = server
@@ -1437,7 +1276,16 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
 
         // create the statement, and run the command
         val statement = connection.createStatement()
-        val isSuccess = statement.execute(sql_command)
+
+        if (colType.isDefined) {
+          resultSet=  statement.executeQuery(sql_command)
+
+        }
+        else {
+          statement.execute(sql_command)
+          null
+        }
+
       } catch {
         case e: Throwable => e.printStackTrace
           throw (e)
@@ -1449,6 +1297,7 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
         }
       }
     }
+    resultSet
   }
 
   def dataFrameToCloudWatch(groupName: String, streamName: String, region: String, accessKey: String, secretKey: String, timeStampColumn: String, timestampFormat: String, df: org.apache.spark.sql.DataFrame, sparkSession: SparkSession): Unit = {
@@ -1491,23 +1340,23 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     })
   }
 
-  def snowflakeToDataFrame (
-    sfUrl: String,
-    sfUser: String, 
-    sfPassword: String,
-    sfDatabase: String, 
-    sfSchema: String,
-    tableOrQuery: String,
-    options: JSONObject,
-    awsEnv: String, 
-    vaultEnv: String, 
-    secretStore: String, 
-    sparkSession: org.apache.spark.sql.SparkSession): org.apache.spark.sql.DataFrame = {
+  def snowflakeToDataFrame(
+                            sfUrl: String,
+                            sfUser: String,
+                            sfPassword: String,
+                            sfDatabase: String,
+                            sfSchema: String,
+                            tableOrQuery: String,
+                            options: JSONObject,
+                            awsEnv: String,
+                            vaultEnv: String,
+                            secretStore: String,
+                            sparkSession: org.apache.spark.sql.SparkSession): org.apache.spark.sql.DataFrame = {
     //if password isn't set, attempt to get from security.Vault
     var vaultPassword = sfPassword
     var vaultLogin = sfUser
     if (vaultPassword == "") {
-      val clusterName= sfUrl + "/" + sfDatabase + "/" + sfSchema
+      val clusterName = sfUrl + "/" + sfDatabase + "/" + sfSchema
       val secretService = new SecretService(secretStore, appConfig)
       val vaultCreds = secretService.getSecret(awsEnv, clusterName, vaultLogin, vaultEnv)
       vaultLogin = vaultCreds("username")
@@ -1518,8 +1367,8 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       "sfUrl" -> sfUrl,
       "sfUser" -> vaultLogin,
       "sfPassword" -> vaultPassword,
-      "sfDatabase" -> sfDatabase, 
-      "sfSchema" ->  sfSchema
+      "sfDatabase" -> sfDatabase,
+      "sfSchema" -> sfSchema
     )
 
     if (options != null) {
@@ -1535,26 +1384,27 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
 
     df
   }
+
   def dataFrameToSnowflake(
-    sfUrl: String,
-    sfUser: String, 
-    sfPassword: String,
-    sfDatabase: String, 
-    sfSchema: String,
-    table: String,
-    saveMode: String,
-    options: JSONObject,
-    awsEnv: String, 
-    vaultEnv: String, 
-    secretStore: String, 
-    df: org.apache.spark.sql.DataFrame, 
-    sparkSession: org.apache.spark.sql.SparkSession
-  ): Unit = {
+                            sfUrl: String,
+                            sfUser: String,
+                            sfPassword: String,
+                            sfDatabase: String,
+                            sfSchema: String,
+                            table: String,
+                            saveMode: String,
+                            options: JSONObject,
+                            awsEnv: String,
+                            vaultEnv: String,
+                            secretStore: String,
+                            df: org.apache.spark.sql.DataFrame,
+                            sparkSession: org.apache.spark.sql.SparkSession
+                          ): Unit = {
     //if password isn't set, attempt to get from security.Vault
     var vaultPassword = sfPassword
     var vaultLogin = sfUser
     if (vaultPassword == "") {
-      val clusterName= sfUrl + "/" + sfDatabase + "/" + sfSchema
+      val clusterName = sfUrl + "/" + sfDatabase + "/" + sfSchema
       val secretService = new SecretService(secretStore, appConfig)
       val vaultCreds = secretService.getSecret(awsEnv, clusterName, vaultLogin, vaultEnv)
       vaultLogin = vaultCreds("username")
@@ -1565,8 +1415,8 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
       "sfUrl" -> sfUrl,
       "sfUser" -> vaultLogin,
       "sfPassword" -> vaultPassword,
-      "sfDatabase" -> sfDatabase, 
-      "sfSchema" ->  sfSchema
+      "sfDatabase" -> sfDatabase,
+      "sfSchema" -> sfSchema
     )
 
     if (options != null) {
@@ -1574,11 +1424,11 @@ class DataFrameFromTo(appConfig: AppConfig, pipeline: String) extends Serializab
     }
 
     df.write
-    .format(SNOWFLAKE_SOURCE_NAME)
-    .options(sfOptions)
-    .option("dbtable", table)
-    .mode(SaveMode.valueOf(saveMode))
-    .save()
+      .format(SNOWFLAKE_SOURCE_NAME)
+      .options(sfOptions)
+      .option("dbtable", table)
+      .mode(SaveMode.valueOf(saveMode))
+      .save()
 
   }
 }

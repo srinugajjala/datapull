@@ -1,8 +1,704 @@
 # Change Log
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)
+
+## [0.1.79] - 2024-06-07
+Added code to rotate subnet.
+### Changed
+-DataPullRequestProcessor.java,DatapullTask.java,DataPullClientConfig
+
+## [0.1.78] - 2024-04-22
+Mandating the Linux flavor of the docker image that's been used in ECR.
+### Changed
+- API/terraform/datapull_task/ecs_deploy.sh
+
+## [0.1.77] - 2024-04-10
+Fixing the null subnetId issue by adding  StringUtils.isNotBlank(dataPullProperties.getApplicationSubnet3())
+### Changed
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+
+## [0.1.76] - 2024-01-08
+Fixing the issue when the key is not provided by the user. and reverting chnages w.r.t insertinto hive table for partitioned table. 
+### Changed
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+- core/src/main/resources/Samples/Input_Json_Specification.json
+- core/src/main/scala/core/DataPull.scala
+- core/src/main/scala/core/Migration.scala
+
+## [0.1.75] - 2023-11-22
+Adding the functionality to able the users to ssh into the ec2 boxes
+### Changed
+api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.74] - 2022-11-22
+
+This is to add a feature for users to give the partition columns while writing to a hive table.
+
+### Changed
+
+- core/src/main/resources/Samples/Input_Json_Specification.json
+- core/src/main/scala/core/DataPull.scala
+- core/src/main/scala/core/Migration.scala
+
+## [0.1.73] - 2023-10-27
+Randomly selecting one subnet_id to eliminate the load on any one subnet while submitting runjobflow requests. 
+
+### Changed
+api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.72] - 2023-10-17
+Fixed bug for datapull subnet-id's issue (picking all default id's randomly)
+
+
+## [0.1.73] - 2023-10-17
+We have modified the code for providing precedence to user tag over the default tags while EMR cluster creation.
+
+### Changed
+api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.71] - 2023-09-04
+Fixed bug for datapull api if the customer providers any duplicate subnet from the default subnets for the respective account.
+
+### Changed
+api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.70] - 2023-09-11
+changed the default instance types to Graviton2-based ec2 instance(m6g.xlarge) for better performance with low-cost
+
+### Changed
+api/src/main/java/com/homeaway/datapullclient/config/EMRProperties.java
+
+
+## [0.1.69] - 2023-06-07
+we have added partitions for every batch we write to s3 to avoid file already existing errors. and added logging for run job flow request response.
+
+### Changed
+api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+core/src/main/scala/core/DataFrameFromTo.scala
+
+## [0.1.68] - 2023-06-07
+
+Fixed bug of missing bracket in the datapulltask file.
+
+### Changed
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.67] - 2023-06-18
+
+Added functionally to configure hdfs-site.xml from the Input JSON.
+
+### added
+
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+- api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+
+## [0.1.66] - 2023-06-07
+
+Fixed bug of failureemailaddress not being passed in the correct argument order to performmigration
+Moved send email call for failureemailaddress outside of min/maxexecutiontime check
+
+### Changed
+
+- core/src/main/scala/core/Controller.scala
+- core/src/main/scala/core/DataPull.scala
+
+
+## [0.1.65] - 2022-10-03
+
+ClusterProperties can now create EMR cluster configuration fields in the "spark-defaults" classification.
+ClusterProperties can now create EMR cluster configuration fields in the "spark-metrics" classification.
+
+### Changed
+
+- api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.64] - 2022-09-21
+
+ClusterProperties can now create EMR cluster configuration fields in the "spark-env" classification.
+
+### Changed
+
+- api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.63] - 2022-07-23
+
+Adding functionality for adding custom bootstrap file while spinning up the EMR cluster.
+
+### Changed
+
+- api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+- core/src/main/resources/Samples/Input_Json_Specification.json
+
+## [0.1.62] - 2022-07-21
+
+Adding examples for SFTP in documentation. 
+
+### Added
+
+- core/src/main/resources/Samples/Input_Sample_s3_SFTP.json
+- docs/docs/sftp.md
+
+## [0.1.61] - 2022-07-18
+
+Bumping emr release version for log4j vulnerability issue.
+
+### Changed
+
+- api/src/main/java/com/homeaway/datapullclient/config/EMRProperties.java
+
+## [0.1.60] - 2022-06-24
+
+Adding functionality for adding custom bootstrap file while spinning up the EMR cluster.
+
+### Changed
+
+- api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+- core/src/main/resources/Samples/Input_Json_Specification.json
+
+## [0.1.59] - 2022-06-16
+
+Adding functionality for sending custom arguments instead of default arguments through datapull API
+
+### Changed
+
+- api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+- core/src/main/resources/Samples/Input_Json_Specification.json
+
+## [0.1.58] - 2022-06-16
+
+Fixed `"logging_level"` in `"jdbcoptions"`
+
+### Changed
+
+- core/src/main/scala/helper/Helper.scala
+
+## [0.1.57] - 2022-06-13
+
+Update log4j version to avoid security vulnerabilities. 
+
+### Changed
+
+- core/pom.xml
+- functional-test/pom.xml
+
+## [0.1.56] - 2022-04-29
+
+This is to add a feature for adding spark session properties for a job.
+
+### Changed
+
+- core/src/main/resources/Samples/Input_Json_Specification.json
+- core/src/main/scala/core/DataPull.scala
+- core/src/main/scala/core/Migration.scala
+
+## [0.1.55] - 2022-03-09
+
+Adding Hive support for Core
+
+### Added
+
+- core/src/main/resources/Samples/Input_Sample_s3-to-hive.json
+
+### Changed
+
+- core/src/main/resources/Samples/Input_Json_Specification.json
+- core/src/main/scala/core/DataFrameFromTo.scala
+- core/src/main/scala/core/Migration.scala
+- api/pom.xml
+
+### Removed
+
+- core/src/main/resources/Samples/Input_Sample_hive-to-filesystem
+
+## [0.1.54] - 2022-03-03
+
+Adding Hive as source platform
+
+### Added
+
+- core/src/main/resources/Samples/Input_Sample_hive_to_s3.json
+
+### Changed
+
+- core/src/main/resources/Samples/Input_Json_Specification.json
+- core/src/main/scala/core/DataFrameFromTo.scala
+- core/src/main/scala/core/Migration.scala
+
+## [0.1.53] - 2022-02-19
+
+Adding Hive support for API
+
+### Changed
+
+- api/src/main/java/com/homeaway/datapullclient/config/EMRProperties.java
+- api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+- config yaml files
+
+
+## [0.1.52] - 2022-02-18
+
+This is the fix to a bug to make bootstrapactionstring work.
+
+### Changed
+
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullRequestProcessor.java
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+- api/src/main/java/com/homeaway/datapullclient/config/EMRProperties.java
+- api/src/main/resources/application-dev.yml
+- api/src/main/resources/application-prod.yml
+- api/src/main/resources/application-stage.yml
+- api/src/main/resources/application-test.yml
+- master_application_config-dev.yml
+- master_application_config-prod.yml
+- master_application_config-stage.yml
+- master_application_config-test.yml
+
+## [0.1.51] - 2022-02-18
+
+THis is add an option to chose logging level by the user for teradata datstores. 
+
+### Changed
+
+- core/src/main/scala/helper/Helper.scala
+- core/src/main/scala/core/DataFrameFromTo.scala
+-  core/src/main/resources/Samples/Input_Json_Specification.json
+
+
+## [0.1.50] - 2022-01-28
+
+This is the fix to a bug in inline expression for jdbc code.
+
+### Changed
+
+- core/src/main/scala/helper/Helper.scala
+
+## [0.1.49] - 2022-01-28
+
+This is to add the functionality for inline expression evaluation for rdbms data stores.
+
+### Changed
+
+- core/src/main/scala/core/Migration.scala
+- core/src/main/scala/core/DataFrameFromTo.scala
+- core/src/main/scala/helper/Helper.scala
+
+## [0.1.48] - 2021-12-15
+This is to upgrade the log4j to fix vulnerability
+
+Changed
+- core/pom.xml
+
+## [0.1.47] - 2021-11-17
+
+This is to accept additional spark conf from the user for any migration 
+
+### Changed 
+
+- core/src/main/scala/core/Migration.scala
+- core/src/main/scala/core/DataPull.scala
+
+## [0.1.46] - 2021-11-17
+
+This is to fix the bug which is throwing error while type casting the coalesce file count for fs writer.
+
+### Changed 
+
+- core/src/main/scala/core/Migration.scala
+- core/src/main/scala/core/DataFrameFromTo.scala
+
+## [0.1.45] - 2021-11-16
+
+Adding optional parameter for the user to configure subnet in which the EMR cluster can be spun up.
+
+### Changed 
+
+-  api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+-  api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+-  core/src/main/resources/Samples/Input_Json_Specification.json
+
+## [0.1.44] - 2021-09-27
+
+-- fix cluster optional forcerestart
+
+### Changed
+-  api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.43] - 2021-09-22
+
+-- adding cluster optional forcerestart in datapull
+
+### Changed
+-  api/src/main/java/com/homeaway/datapullclient/config/EMRProperties.java
+-  api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+-  api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+-  core/src/main/resources/Samples/Input_Json_Specification.json
+
+## [0.1.42] - 2021-08-03
+
+- Fixed a bug which was mandating aws secret access key for every migration
+
+### Changed
+
+- core/src/main/scala/core/DataPull.scala
+
+## [0.1.41] - 2021-07-29
+
+- Added optional attributes to make it easier to process Kafka streams created by MongoDB kafka connect source
+- Added support for sql queries (jdbc and spark sql queries) to passed in as sql files from filesystem/S3
+- Fixed bug in AWS Secrets Manager support, and added support for `inlinesecret{{}}`
+- Increased timeout for API health check
+- Fix bug of occasionally expiring CloudWatch log tokens
+- Fix bug of EMR clusters not being re-used occasionally
+
+### Changed
+
+- Added optional attributes to make it easier to process Kafka streams created by MongoDB kafka connect source
+  - core/src/main/scala/core/DataFrameFromTo.scala
+  - core/src/main/resources/Samples/Input_Json_Specification.json
+- Added support for sql queries (jdbc and spark sql queries) to passed in as sql files from filesystem/S3
+  - core/src/main/scala/core/DataPull.scala
+  - core/src/main/scala/helper/Helper.scala
+  - core/src/main/resources/Samples/Input_Json_Specification.json
+  - core/src/main/scala/core/Migration.scala
+- Fixed bug in AWS Secrets Manager support, and added support for `inlinesecret{{}}`
+  - core/src/main/scala/core/Controller.scala
+  - core/src/main/scala/helper/Helper.scala
+  - core/src/main/scala/core/Migration.scala
+  - core/src/main/scala/security/SecretService.scala
+  - core/src/main/scala/security/SecretsManager.scala
+  - core/src/main/scala/security/SecretStore.scala
+  - core/src/main/scala/security/Vault.scala
+  - docs/docs/access_secrets.md
+  - docs/mkdocs.yml
+- Increased timeout for API health check
+  - api/terraform/datapull_task/datapull_ecs.tf
+- Fix bug of expiring CloudWatch log tokens
+  - core/src/main/scala/logging/DataPullLog.scala
+- Fix bug of EMR clusters not being re-used occasionally
+  - api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.40] - 2021-06-30
+
+- Bug fix to pick up streaming parameters
+- Sequencefile write with long key and default/snappy/deflate codecs
+
+### Changed
+
+- Bug fix to pick up streaming parameters
+  - core/src/main/scala/core/Migration.scala
+- Sequencefile write with long key and snappy codec
+  - core/src/main/scala/core/DataFrameFromTo.scala
+  - core/docker_spark_server/Dockerfile
+  - core/src/main/resources/Samples/Input_Json_Specification.json
+
+## [0.1.39] - 2021-06-24
+
+- Bug fix to pick up streaming parameters
+- Support for inline Spark SQL expressions in input json and sequencefile format
+- Support for Structured Streaming watermarks (for stream-to-stream left joins, etc.)
+
+### Changed
+
+- Bug fix to pick up streaming parameters 
+  - core/src/main/scala/core/Migration.scala
+- Support for inline Spark SQL expressions in input json and sequencefile format
+  - core/src/main/scala/core/DataFrameFromTo.scala
+  - core/src/main/scala/core/DataPull.scala
+  - core/src/main/scala/helper/Helper.scala
+  - manual-tests/filesystem_dataset_to_elasticsearch_to_filesystem/README.md
+  - manual-tests/filesystem_dataset_to_elasticsearch_to_filesystem/datapull_input.json
+  - core/src/main/resources/Samples/Input_Json_Specification.json
+- Support for Structured Streaming watermarks (for stream-to-stream left joins, etc.)
+  - core/src/main/scala/core/DataFrameFromTo.scala
+  - core/src/main/resources/Samples/Input_Json_Specification.json
+
+## [0.1.38] - 2021-06-14
+
+- Update jettison dependency
+
+### Changed
+
+- core/pom.xml
+
+## [0.1.37] - 2021-06-14
+
+- Upgraded ABRiS library
+- Support for S3 streaming destination
+
+### Changed
+
+- core/pom.xml
+- core/src/main/scala/helper/Helper.scala
+- core/src/main/scala/core/DataFrameFromTo.scala
+- core/src/main/scala/core/Migration.scala
+
+## [0.1.36] - 2021-06-08
+
+- Re-added AWS bom for dependency management
+- Fixed bug with SES config
+- Added common options to Snowflake example
+- Better error message when sql attribute in input json provided without query attribute
+- Added required additional dependencies for jackson v 2.12.2
+- Update Spark 2.4.7 local spark clusters to 2.4.8
+- Updated documentation to fix embedded html issues
+- Support for Kafka topics that aren't registered with Schema Registry
+
+### Changed
+
+- core/src/main/scala/config/AppConfig.scala
+- core/pom.xml
+- core/src/main/resources/Samples/Input_Sample_snowflake-to-filesystem-to-snowflake.json
+- core/src/main/scala/core/Migration.scala
+- api/pom.xml
+- Update Spark 2.4.7 local spark clusters to 2.4.8
+  - **/README.md
+  - core/src/main/resources/Samples/Input_Json_Specification.json
+  - core/Docker_Spark_Server/Dockerfile
+- docs/docs/install_on_aws.md
+- core/src/main/scala/core/DataFrameFromTo.scala
+
+## [0.1.35] - 2021-05-25
+
+- Made Consul datacenter Urls, AWS tags config-driven
+- Added tags to ECR repo
+- Upgraded API docker base image from non-supported version
+- Removed extra leading slash for vault url prefix
+
+### Changed
+
+- Made Consul datacenter Urls, cost center tag config-driven
+    - core/src/main/scala/config/AppConfig.scala
+    - api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+    - core/src/main/scala/helper/Consul.scala
+    - api/terraform/datapull_task/datapull_ecs.tf
+    - api/src/main/java/com/homeaway/datapullclient/process/DataPullRequestProcessor.java
+    - api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+    - api/terraform/datapull_task/ecs_deploy.sh
+    - api/terraform/datapull_task/ecs_deploy_uninstall.sh
+    - core/src/main/scala/core/Migration.scala
+    - api/terraform/datapull_task/variables.tf
+- Added tags to ECR repo
+    - api/terraform/datapull_iam/datapull_user_and_roles.tf
+- Upgraded API docker base image from non-supported version
+    - api/Dockerfile
+- Removed extra leading slash for vault url prefix
+    - core/src/main/scala/security/Vault.scala
+
+## [0.1.34] - 2021-05-18
+
+Upgraded jackson and aws dependencies; standardised iswindowsauthenticated attribute 
+
+### Changed
+
+- Upgraded jackson and aws dependencies
+    - **/pom.xml
+- standardised iswindowsauthenticated attribute
+    - core/src/main/scala/core/DataPull.scala 
+    - core/src/main/scala/core/Migration.scala
+    - core/src/main/resources/Samples/Input_Sample_teradata-to-filesystem.json
+
+## [0.1.33] - 2021-05-18
+
+Removed env var that clashes with fargate, fixed support for s3 service endpoints by adding support for fileprefix and schema for filesystem-like stores, updated manual test to cover explicitly specified schema
+
+### Changed
+
+- Remove env var that clashes with fargate
+    - api/terraform/datapull_task/datapull_ecs.tf
+- fixed support for s3 service endpoints by adding support for fileprefix and schema for filesystem-like stores
+    - core/src/main/scala/core/DataFrameFromTo.scala
+    - core/src/main/scala/logging/DataPullLog.scala
+    - core/src/main/scala/core/Migration.scala
+- updated manual test to cover explicitly specified schema
+    - manual-tests/filesystem_stream_to_kafka/datapull_input.json
+    - manual-tests/filesystem_stream_to_kafka/README.md
+
+## [0.1.32] - 2021-05-15
+
+- Upgraded Elasticsearch maven dependency to support ES 7.12.1, removed, unused dependencies
+- Fixed https://github.com/homeaway/datapull/issues/81
+- Added manual test for Elasticsearch sources and destinations
+- Fixed Elasticsearch bugs, added support for additional optional ES Options and associated documentation
+- Made Elasticsearch port, mapping, etc. optional with defaults
+
+### Changed
+
+- Upgraded Elasticsearch maven dependency to support ES 7.12.1, removed, unused dependencies
+    - core/pom.xml
+- Fixed https://github.com/homeaway/datapull/issues/81
+    - core/src/main/resources/Samples/Input_Sample_*.json
+    - functional-test/src/main/resources/dev_global-config.json
+    - functional-test/src/main/resources/test_global-config.json
+    - docs/docs/transformation.md
+- Fixed Elasticsearch bugs, added support for additional optional ES Options and associated documentation
+    - core/src/main/scala/core/DataFrameFromTo.scala
+    - core/src/main/resources/Samples/Input_Json_Specification.json
+- Made Elasticsearch port, mapping, etc. optional with defaults
+    - core/src/main/scala/core/Migration.scala
+
+### Added
+- Added manual test for Elasticsearch sources and destinations
+    - manual-tests/filesystem_dataset_to_elasticsearch_to_filesystem/*
+
+## [0.1.31] - 2021-05-12
+
+Remove bintray-bound Neo4j lib implementation until https://neo4j.com/product/connectors/apache-spark-connector/?ref=blog can be implemented
+
+### Changed
+
+- core/src/main/resources/Samples/Input_Json_Specification.json
+- core/src/main/resources/Samples/Input_Sample_Oracle_PostPreMigration.json
+- core/src/main/scala/core/DataFrameFromTo.scala
+- core/src/main/scala/core/Migration.scala
+- core/pom.xml
+- docs/docs/index.md
+- functional-test/src/main/resources/dev_global-config.json
+- functional-test/src/main/resources/test_global-config.json
+- functional-test/Jenkinsfile
+- functional-test/pom.xml
+- functional-test/testng.xml
+
+### Deleted
+
+- core/src/main/resources/Samples/Input_Sample_filesystem_to_Neo4j.json
+- core/src/main/resources/Samples/Input_Sample_Neo4j.json
+- core/src/main/scala/helper/Neo4j.scala
+- functional-test/src/main/java/com/homeaway/utils/db/Neo4j.java
+- functional-test/src/main/resources/input_files/MySQL-to-Neo4j.json
+- functional-test/src/main/resources/input_files/Neo4jRelations.json
+- functional-test/src/test/java/com/homeaway/DataPull/DataPullMySQLToNeo4JTest.java
+
+## [0.1.30] - 2021-05-11
+
+Fixing small bugs and making the brand, costcenter, application tags as optional; definition of dockerised spark server; installation instructions for Oracle and Teradata drivers
+
+### Changed
+
+- api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+- api/src/main/resources/input_json_schema.json
+- core/docker_spark_server/Dockerfile
+- docs/docs/oracle_teradata_support.md
+
+## [0.1.29] - 2021-04-29
+Added manual tests for mysql and mssql data stores, added support for secure Kafka schema registries, give ownership of files to bucket owners when writing to S3, reduced code redundancy, added permissions for bootstrap files and ECS tags, permission for default and custom EC2 EMR roles to send SES emails, support for custom AWS Service Endpoints like IBM Object Storage, made BucketOwnerFullControl default but removable
+
+### Added
+- manual-tests/mssql_dataset_to_mysql_to_mssql/* - Manual test for batch and pre/post-migrate commands on mysql and mssql data stores
+
+### Changed
+- DataFrameFromTo.scala - Added support for secure Kafka schema registries, give ownership of files to bucket owners when writing to S3, reduced code redundancy, made BucketOwnerFullControl default but removable
+- Helper.scala - Added support for secure Kafka schema registries
+- Input_Json_Specification.json - Added documentation for Teradata type (fastexport, fastload, etc), documentation for custom AWS Service Endpoints like IBM Object Storage, made BucketOwnerFullControl default but removable
+- Migration.scala - Removed debug print that can cause credentials to leak to logs
+- datapull_user_and_roles.tf - Added permissions for bootstrap files and ECS tags, and for sending SES emails
+- Controller.scala - Set SES From email name to DataPull
+- sample_custom_emr_ec2_role.tf - Added permissions for sending SES emails
+- DataPull.scala - support for custom AWS Service Endpoints like IBM Object Storage, made BucketOwnerFullControl default but removable
+
+## [0.1.28] - 2021-04-13
+Converted Kafka source to use ABRiS and support spark streaming, support streaming filesystem source, add Console as a destination for batch and stream
+
+### Added
+- manual-tests/filesystem_stream_to_kafka/* - Manual test for streaming filesystems and Kafka sources
+
+### Changed
+- core/src/main/resources/Samples/Input_Json_Specification.json - Added documentation to support SSL Kafka sources and destinations,  plus update missing documentation for some filesystem actions
+- Sample input json files - Updated to reflect change in sample CSV data file location
+- core/src/main/scala/core/DataFrameFromTo.scala - Converted Kafka source to use ABRiS and support spark streaming, , support streaming filesystem source
+- core/src/main/scala/core/Migration.scala - add Console as a destination for batch and stream, support streaming etc for file source and Kafka; refactored some function calls to use explicit parameter names
+- core/src/main/scala/helper/Helper.scala - Added support for Kafka as a source, using ABRiS
+- core/src/test/scala/DataFrameFromToFileSystem.scala - updated default value of mergeSchema option for parquet files, to false from null
+- core/src/main/scala/core/DataPull.scala Removed unused code
+
+## [0.1.27] - 2021-04-12
+### Changed
+- Controller.scala - Throw an exception to end the execution with exit code 1 when at least one migration has an error.
+
+## [0.1.26] - 2021-04-12
+### Changed
+- api/src/main/java/com/homeaway/datapullclient/config/DataPullClientConfig.java
+- api/src/main/java/com/homeaway/datapullclient/input/ClusterProperties.java
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullRequestProcessor.java
+- api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java
+
+## [0.1.25] - 2021-03-24
+### changed
+- Migration.scala - Fix port issue
+
+## [0.1.24] - 2021-03-20
+Added support for string event format for Kafka destinations
+### Added
+- .gitattributes - Force *.sh files to be handled with LF line endings regardless of OS, by git
+### Changed
+- core/src/main/scala/core/{DataFrameFromTo.scala, Migration.scala} - Added support for string event format for Kafka destinations
+- core/src/main/resources/Samples/Input_Sample_s3_to_kafka.json - Updated example to use string format for kafka event key
+- core/src/main/resources/Samples/Input_Json_Specification.json - Updated spec to support string event format for Kafka destinations
+- manual-tests/filesystem_dataset_to_kafka/{README.md, datapull_input.json} - Updated manual test to test for string event format
+- api/terraform/*/*.sh - changed line endings from CRLF to LF
+- api/terraform/datapull_task/ecs_deploy.sh - removed `exit 0` from some previous debug accidentally committed
+
+## [0.1.23] - 2021-03-14
+### Added
+- manual-tests/filesyste_dataset_to_kafka* - Added manual test instructions to test data movement from filesystem to kafka topic
+### Changed
+- core/pom.xml - Removed redundant dependency that causes runtime conflict for kafka clients
+- manual-tests/README.md - Centralised steps to confirm datapull works locally, prior to doing the manual tests
+- README.md, manual-tests/filesystem_dataset_with_uuids_to_mongodb/README.md - Updated spark submit command with necessary kafka runtime dependency
+
+## [0.1.22] - 2021-03-08
+### Added
+- manual-tests/* - Added manual test instructions and supporting material
+
+### Changed
+- core/docker_spark_server/Dockerfile - Updated the download mirrors and versions for Apache Spark and Hadoop binaries
+- pom.xml - Updated hadoop version to commonly supported version
+- README.md - Updated with referece to manual tests
+
+## [0.1.21] - 2021-02-25
+### Changed
+- core/src/main/scala/core/DataFramFromTo.scala - No longer using asInstanceOf[MongoClientURI]
+
+## [0.1.20] - 2021-02-24
+- core/src/main/scala/core/DataFramFromTo.scala - Fixed few arguments w.r.t the building kafka properties
+- core/src/main/scala/core/Migration.scala
+- core/src/main/scala/helper/Helper.scala
+
+## [0.1.19] - 2021-02-12
+### Changed
+- api/src/main/java/com/homeaway/datapullclient/config/EMRProperties.java: Upgraded EMR version to 5.31.0
+- core/docker_spark_server/Dockerfile: Upgraded Spark version to 2.4.6, downgraded Hadoop version to 2.10.0
+- core/src/main/resources/Samples/Input_Json_Specification.json: Upgraded Kafka destination spec to match abris 4.0.1 capabilities
+- core/src/main/resources/Samples/Input_Sample_Join_Heterogeneous_Sources.json: Fixed file spelling
+- core/src/main/resources/Samples/Input_Sample_s3_to_kafka.json: Upgraded example to match abris 4.0.1 capabilities
+- core/src/main/scala/core/DataFramFromTo.scala: Removed unnecessary println's, Use s3a when running locally, s3 otherwise, upgraded ABRiS to 4.0.1
+- core/src/main/scala/core/DataPull.scala: Use s3a when running locally, s3 otherwise
+- core/src/main/scala/core/Migration.scala: Removed unnecessary println's, upgraded ABRiS to 4.0.1
+- pom.xml: Upgraded Spark version to 2.4.6, downgraded Hadoop version to 2.10.0, removed shaded jar, upgraded ABRiS to 4.0.1
+- README.md: Upgraded Spark version to 2.4.6, downgraded Hadoop version to 2.10.0
+
+
+## [0.2.1] - 2021-01-26
+### Changed
+api/src/main/java/com/homeaway/datapullclient/process/DataPullTask.java: S3 Cross-Account Access Support.
+
+## [0.2.0] - 2020-12-22
+### Changed
+- Fixed install script error, upgraded AWS CLI to v2
+- Fixed the MS DOS batch script for IAM principals
+- Removed unnecessary environment variables
+### Removed
+- Removed the MS DOS batch script for ECS Deploy
+
 
 ## [0.1.18] - 2020-11-05
 ### Changed

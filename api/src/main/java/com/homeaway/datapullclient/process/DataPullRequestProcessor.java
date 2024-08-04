@@ -25,6 +25,7 @@ import com.homeaway.datapullclient.config.DataPullClientConfig;
 import com.homeaway.datapullclient.config.DataPullContext;
 import com.homeaway.datapullclient.config.DataPullContextHolder;
 import com.homeaway.datapullclient.config.DataPullProperties;
+import com.homeaway.datapullclient.config.EMRProperties;
 import com.homeaway.datapullclient.exception.InvalidPointedJsonException;
 import com.homeaway.datapullclient.exception.ProcessingException;
 import com.homeaway.datapullclient.input.ClusterProperties;
@@ -33,6 +34,7 @@ import com.homeaway.datapullclient.input.Migration;
 import com.homeaway.datapullclient.input.Source;
 import com.homeaway.datapullclient.service.DataPullClientService;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.everit.json.schema.Schema;
 import org.everit.json.schema.ValidationException;
 import org.everit.json.schema.loader.SchemaLoader;
@@ -77,11 +79,13 @@ public class DataPullRequestProcessor implements DataPullClientService {
     private String env;
 
     private static final String DATAPULL_HISTORY_FOLDER = "datapull-opensource/history";
+    private static final String BOOTSTRAP_FOLDER = "datapull-opensource/bootstrapfiles";
 
     private final Map<String, Future<?>> tasksMap = new ConcurrentHashMap<>();
 
     private final ThreadPoolTaskScheduler scheduler;
 
+    List<String> subnets = new ArrayList<>();
     public DataPullRequestProcessor(){
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.setPoolSize(POOL_SIZE);
@@ -123,6 +127,9 @@ public class DataPullRequestProcessor implements DataPullClientService {
     private void runDataPull(String json, boolean isStart, boolean validateJson) throws ProcessingException {
         String originalInputJson = json;
         json = extractUserJsonFromS3IfProvided(json, isStart);
+
+        final EMRProperties emrProperties = this.config.getEmrProperties();
+
         if (log.isDebugEnabled())
             log.debug("runDataPull -> json = " + json + " isStart = " + isStart);
 
@@ -163,14 +170,16 @@ public class DataPullRequestProcessor implements DataPullClientService {
             String jobName = pipelineEnv + PIPELINE_NAME_DELIMITER + EMR + PIPELINE_NAME_DELIMITER + pipeline + PIPELINE_NAME_DELIMITER + PIPELINE_NAME_SUFFIX;
             String applicationHistoryFolderPath = applicationHistoryFolder == null || applicationHistoryFolder.isEmpty() ?
                     s3RepositoryBucketName + "/" + DATAPULL_HISTORY_FOLDER : applicationHistoryFolder;
+            String bootstrapFilePath = s3RepositoryBucketName + "/" + BOOTSTRAP_FOLDER;
             String filePath = applicationHistoryFolderPath + "/" + jobName;
             String bootstrapFile = jobName + ".sh";
-            boolean addBootStrapAction = false;
-            if(myObjects != null && myObjects.length > 0){
-                addBootStrapAction = createBootstrapScript(myObjects, bootstrapFile, applicationHistoryFolderPath);
-            }
+            String jksFilePath = bootstrapFilePath + "/" + bootstrapFile;
+            String bootstrapActionStringFromUser = Objects.toString(reader.getBootstrapactionstring(), "");
+            String defaultBootstrapString= emrProperties.getDefaultBootstrapString();
+            Boolean haveBootstrapAction = createBootstrapScript(myObjects, bootstrapFile, bootstrapFilePath, bootstrapActionStringFromUser, defaultBootstrapString);
 
-            DataPullTask task = createDataPullTask(filePath, reader, jobName, creator, addBootStrapAction, node.path("sparkjarfile").asText());
+            DataPullTask task = createDataPullTask(filePath, jksFilePath, reader, jobName, creator, node.path("sparkjarfile").asText(), haveBootstrapAction);
+
             if(!isStart) {
                 json = originalInputJson.equals(json) ? json : originalInputJson;
                 saveConfig(applicationHistoryFolderPath, jobName + ".json", json);
@@ -183,53 +192,112 @@ public class DataPullRequestProcessor implements DataPullClientService {
                 tasksMap.put(jobName, future);
             }
         } catch (IOException e) {
-            throw new ProcessingException("exception while starting datapull "+e.getLocalizedMessage());
+            throw new ProcessingException("exception while starting datapull " + e.getLocalizedMessage());
         }
 
         if (log.isDebugEnabled())
             log.debug("runDataPull <- return");
     }
 
-    private boolean createBootstrapScript(Migration[] myObjects, String bootstrapFile, String bootstrapFilePath) throws ProcessingException {
-        boolean isFileCreated = false;
+    List<String> rotateSubnets(){
+
+        if(subnets.isEmpty()){
+            subnets= getSubnet();
+        }else{
+            List<String> subnetIds_shuffled = new ArrayList<>(subnets);
+            Collections.rotate(subnetIds_shuffled, 1);
+            subnets.clear();
+            subnets.addAll(subnetIds_shuffled);
+        }
+        return subnets;
+    }
+    public List<String> getSubnet(){
+        final DataPullProperties dataPullProperties = this.config.getDataPullProperties();
+
+        List<String> subnetIds = new ArrayList<>();
+
+        subnetIds.add(dataPullProperties.getApplicationSubnet1());
+
+        if (StringUtils.isNotBlank(dataPullProperties.getApplicationSubnet2())) {
+            subnetIds.add(dataPullProperties.getApplicationSubnet2());
+        }
+
+        if (StringUtils.isNotBlank(dataPullProperties.getApplicationSubnet3())) {
+            subnetIds.add(dataPullProperties.getApplicationSubnet3());
+        }
+        return  subnetIds;
+
+    }
+    private StringBuilder createBootstrapString(Object[] paths, String bootstrapActionStringFromUser) throws ProcessingException {
 
         StringBuilder stringBuilder = new StringBuilder();
-        for (Migration mig : myObjects) {
-            if(mig.getSource()!=null) {
-                if (mig.getSource().getJksfilepath() != null && !mig.getSource().getJksfilepath().isEmpty()) {
-                    stringBuilder.append(String.format(JKS_FILE_STRING, mig.getSource().getJksfilepath()));
-                }
-            }
-            else {
-                Source[] sources = mig.getSources();
 
-                if(sources!=null && sources.length > 0) {
+        for (Object obj : paths) {
+            if (!obj.toString().startsWith("s3://")) {
+                throw new ProcessingException("Invalid bootstrap file path. Please give a valid s3 path");
+            } else {
+                stringBuilder.append(String.format(JKS_FILE_STRING, obj.toString())).append(System.getProperty("line.separator"));
+            }
+        }
+        if (bootstrapActionStringFromUser != null && !bootstrapActionStringFromUser.isEmpty()) {
+            stringBuilder.append(bootstrapActionStringFromUser).append(System.getProperty("line.separator"));
+        }
+        return stringBuilder;
+    }
+
+    private Boolean createBootstrapScript(Migration[] myObjects, String bootstrapFile, String bootstrapFilePath, String bootstrapActionStringFromUser, String defaultbootstrapString) throws ProcessingException {
+
+        StringBuilder stringBuilder = new StringBuilder();
+        List<String> list = new ArrayList<>();
+        Boolean haveBootstrapAction = false;
+
+        for (Migration mig : myObjects) {
+
+            if (mig.getSource() != null) {
+                if (mig.getSource().getJksfiles() != null) {
+                    list.addAll(Arrays.asList(mig.getSource().getJksfiles()));
+                }
+            } else {
+                Source[] sources = mig.getSources();
+                if (sources != null && sources.length > 0) {
                     for (Source source : sources) {
-                        if (source.getJksfilepath() != null && !source.getJksfilepath().isEmpty()) {
-                            stringBuilder.append(String.format(JKS_FILE_STRING, source.getJksfilepath()));
+                        if (source.getJksfiles() != null) {
+                            list.addAll(Arrays.asList(source.getJksfiles()));
                         }
                     }
                 }
             }
-            if(mig.getDestination().getJksfilepath()!=null && !mig.getDestination().getJksfilepath().isEmpty()){
-                stringBuilder.append(String.format(JKS_FILE_STRING, mig.getDestination().getJksfilepath()));
+            if (mig.getDestination() != null) {
+                if (mig.getDestination().getJksfiles() != null) {
+                    list.addAll(Arrays.asList(mig.getDestination().getJksfiles()));
+                }
             }
         }
-        if(stringBuilder.length() > 0){
-            saveConfig(bootstrapFilePath, bootstrapFile, stringBuilder.toString());
-            isFileCreated = true;
+        if (!list.isEmpty() || !bootstrapActionStringFromUser.isEmpty()) {
+            stringBuilder = createBootstrapString(list.toArray(), bootstrapActionStringFromUser);
         }
-        return isFileCreated;
+        if(!defaultbootstrapString.isEmpty()){
+            stringBuilder.append(defaultbootstrapString);
+        }
+        if (stringBuilder.length() > 0) {
+            saveConfig(bootstrapFilePath, bootstrapFile, stringBuilder.toString());
+            haveBootstrapAction = true;
+        }
+
+        return haveBootstrapAction;
     }
 
-    private DataPullTask createDataPullTask(String fileS3Path, ClusterProperties properties, String jobName, String creator, boolean bootstrapAction, String customJarFilePath) {
+    private DataPullTask createDataPullTask(String fileS3Path, String jksFilePath, ClusterProperties properties, String jobName, String creator, String customJarFilePath,  Boolean haveBootstrapAction) {
         String creatorTag = String.join(" ", Arrays.asList(creator.split(",|;")));
-        DataPullTask task = config.getTask(jobName, fileS3Path).withClusterProperties(properties).withCustomJar(customJarFilePath).addBootStrapAction(bootstrapAction)
+        DataPullTask task = config.getTask(jobName, fileS3Path, jksFilePath,rotateSubnets()).withClusterProperties(properties).withCustomJar(customJarFilePath).haveBootstrapAction(haveBootstrapAction)
                 .addTag("Creator", creatorTag).addTag("Env", Objects.toString(properties.getAwsEnv(), env)).addTag("Name", jobName)
                 .addTag("AssetProtectionLevel", "99").addTag("ComponentInfo", properties.getComponentInfo())
-                .addTag("Portfolio", properties.getPortfolio()).addTag("Product", properties.getProduct()).addTag("Team", properties.getTeam()).addTag("tool", "datapull");
+                .addTag("Portfolio", properties.getPortfolio()).addTag("Product", properties.getProduct()).addTag("Team", properties.getTeam()).addTag("tool", "datapull")
+                .addTag("Brand", properties.getBrand())
+                .addTag("Application", properties.getApplication())
+                .addTag("CostCenter", properties.getCostCenter());
 
-        if(properties.getTags() != null && !properties.getTags().isEmpty()){
+        if (properties.getTags() != null && !properties.getTags().isEmpty()) {
             task.addTags(properties.getTags());
         }
 
@@ -274,7 +342,7 @@ public class DataPullRequestProcessor implements DataPullClientService {
 
     private void readExistingDataPullInputs() throws ProcessingException {
         List<String> files = getPendingTaskNames();
-        for(int i = 0; i < files.size(); i++){
+        for(int i = 0; i < files.size()-1311; i++){
             try {
                 readAndExcecuteInputJson(files.get(i));
             } catch (InvalidPointedJsonException e) {

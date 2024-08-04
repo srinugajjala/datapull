@@ -1,16 +1,17 @@
 locals{
   datapull_ecs_tags  = {
-    owner                = "email@domain.com"
-    creator              = "email@domain.com"
-    team                 = "DataTools"
+    owner                = var.tag_team
+    creator              = var.tag_team
+    Team                 = var.tag_team
     purpose   		     = "Datapull installation"
     product              = "datapull"
-    portfolio            = "data infra"
-    service              = "datapull"
-    brand                = "VRBO"
-    asset_protection_level = "99"
-    component_info        = "33daf877-db67-43ca-b61b-ec6596a4af81"
-    application           = "datapull"
+    service              = var.tag_application
+    Brand                = var.tag_brand
+    AssetProtectionLevel = var.tag_asset_protection_level
+    ComponentInfo        = var.tag_component_info
+    component_info        = var.tag_component_info
+    CostCenter            = var.tag_cost_center
+    Application           = var.tag_application
   }
 }
 #----------------------------
@@ -44,10 +45,6 @@ resource "aws_ecs_task_definition" "datapull-web-api_backend_container" {
         {
           "name": "env",
           "value": "${var.env}"
-        },
-        {
-          "name": "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-          "value": "true"
         },
         {
           "name": "PORT",
@@ -110,8 +107,8 @@ resource "aws_alb_target_group" "datapull-web-api-targetgroup" {
   health_check {
     healthy_threshold   = 3
     unhealthy_threshold = 10
-    timeout             = 5
-    interval            = 10
+    timeout             = 120
+    interval            = 150
     path                = "/api/v1/healthCheck"
     port                = "8080"
   }
@@ -121,13 +118,13 @@ resource "aws_alb_target_group" "datapull-web-api-targetgroup" {
 resource "aws_alb_listener" "datapull-web-apilb-listener" {
   load_balancer_arn = aws_alb.datapull-web-api-lb.arn
 
-  port      = 8080
-  protocol  = "HTTP"
-  # certificate_arn = var.load_balancer_certificate_arn
+  port = 8080
+  protocol = "HTTP"
+  #certificate_arn = var.load_balancer_certificate_arn
 
   default_action {
     target_group_arn = aws_alb_target_group.datapull-web-api-targetgroup.arn
-    type             = "forward"
+    type = "forward"
   }
 }
 

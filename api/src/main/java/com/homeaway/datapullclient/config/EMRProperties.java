@@ -48,10 +48,10 @@ public class EMRProperties {
     @Value("${instance_count:6}")
     private int instanceCount;
 
-    @Value( "${master_type:m4.large}" )
+    @Value("${master_type:m6g.xlarge}")
     private String masterType;
 
-    @Value( "${slave_type:m4.large}" )
+    @Value("${slave_type:m6g.xlarge}")
     private String slaveType;
 
     @Value("${service_role:emr_datapull_role}")
@@ -60,11 +60,22 @@ public class EMRProperties {
     @Value("${job_flow_role:emr_ec2_datapull_role}")
     private String jobFlowRole;
 
-    @Value( "${emr_release:emr-5.29.0}" )
+    @Value("${emr_release:emr-5.31.1}")
     private String emrRelease;
 
     @Value( "${bootstrap_folder_path:}" )
     private String bootstrapFolderPath;
 
+    @Value( "${forcerestart:false}" )
+    private Boolean forceRestart;
+    
+    @Value( "${default_bootstrapstring}" )
+    private String defaultBootstrapString;
+
+    private Map<String, String> hiveProperties = new HashMap<String, String>();
+
+    private Map<String, String> sparkHiveProperties = new HashMap<String, String>();
+
     private Map<String, String> tags = new HashMap<String, String>();
+
 }

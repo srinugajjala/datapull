@@ -20,26 +20,41 @@
   "parallelmigrations": false,
   "reportcounts": "default value for this is true and if you want to process the job a bit faster at the cost of not having counts in the email",
   "no_of_retries": "The number of retries the tasks within a job has to be tried in case of a failure",
-  "comment_failureemailaddress": "optional. If provided, an failure email report is sent to this address in case of job failures and for scheduled prod jobs can be paged/any default email in the properties file",
+  "comment_failureemailaddress": "Optional. If provided, a failure email report is sent to this address in case the DataPull job fails during the Spark execution. If the job fails when the Spark cluster is being spun up, because of AWS resourcing issues or if the IAM Role for the EMR cluster is invalid, no email will be sent out since it is the Spark cluster itself that is sending the failure email.",
   "failureemailaddress": "yourid@DOMAIN.com",
   "migrations": [
     {
       "comment_source_destination": "source and destination are required elements in this JSON. The format varies, based on the platform. The elements source_* and destination_* below show examples of sources and destinations of various platforms supported by Data Migration. The format of a platform is the ssame regardless of whether it is used as a source or a destination",
       "source_file": {
         "platform": "filesystem",
+        "comment_path": "This is the path seen by the spark application. For hfds paths, please prefix with hdfs:// . You can also use inline Spark SQL expressions to dynamically select the path. For example, if you want to pick a subfolder that has today's date, you can specify the path as /FOLDER/inlineexpr{{select date_format(now(), 'yyyy-MM-dd')}}/",
         "path": "/FOLDER/SUB_FOLDER/",
-        "comment_fileformat": "Supported formats are parquet,json,csv,orc,avro. Tab-delimited files can be read by cboosing the fileformat as csv and setting the delimiter to \t",
+        "comment_fileformat": "Supported formats are parquet,json,csv,orc,avro,sequencefile,sequencefilesnappy (requires snappy codec in spark extra library paths),sequencefiledeflate. Sequencefiles formats are currently supported for writes alone. Tab-delimited files can be read by cboosing the fileformat as csv and setting the delimiter to \t",
         "fileformat": "parquet",
-        "comment_groupbyfields": "optional. Applies only to destinations. If specified, the records are group in nested subfolders named field1=value etc",
+        "comment_groupbyfields": "optional. Applies only to destinations where the format is not sequencefile. If specified, the records are group in nested subfolders named field1=value etc. For destinations that use the sequencefile format, you can create partitions by providing an inline expression in the destination file path",
         "groupbyfields": "field1,field2",
-        "comment_delimiter": "Accepted values are ',','\t' and default value is comma(,)",
-        "delimiter": "\t",
+        "comment_delimiter": "Deprecated in favor of sparkoptions.delimiter. Optional, defaulted to comma(,). User \\t for tab-delimited files. Applies only for csv fileformat",
+        "delimiter": ",",
         "comment_charset": "charset is for specifying the type whether it is utf-16/utf-8 and it is optional and defaulted to utf-8",
-        "charset": "utf-16"
+        "charset": "utf-16",
+        "comment_isstream": "Optional, defaulted to false. Set to true if you want changes to the filesystem to be streamed instead of read as a batch, as input. If set to true, do not use the built-in scheduler since the spark process will run continuously.",
+        "isstream": false,
+        "comment_sparkoptions": "optional set of spark.cassandra options. these options will override equivalent parameters if both are provided. For example, delimiter specificed in sparkoptions will override delimiter specified (and deprecated) above",
+        "sparkoptions": {
+          "comment_checkpointLocation": "For some output sinks where the end-to-end fault-tolerance can be guaranteed, specify the location where the system will write all the checkpoint information. This should be a directory in an HDFS-compatible fault-tolerant file system. ref https://spark.apache.org/docs/2.4.8/structured-streaming-programming-guide.html#recovering-from-failures-with-checkpointing",
+          "checkpointLocation": "s3a://S3BUCKET_AND_PATH or /LOCALHDFSPATH",
+          "comment_delimiter": "Optional, defaulted to comma(,). Use \\t for tab-delimited files. Applies only for csv fileformat",
+          "delimiter": "\t"
+        },
+        "comment_fileprefix": "Optional. If set, this explicitely sets the file prefix.",
+        "fileprefix": "hdfs://",
+        "comment_schema": "Optional, applies only to sources. If set, this explicitly sets the schema of the read files. If not set, the schema is inferred if possible",
+        "schema": "`id` BIGINT,`name` STRING"
       },
       "source_s3": {
         "platform": "s3",
         "s3path": "BUCKET_NAME/FOLDER_PATH",
+        "alias": "Mandatory field, when a Spark SQL query is provided in the 'query' field, the alias represent the table name of the data from this source",
         "comment_fileformat": "Supported formats are parquet,json,csv,orc,avro. Tab-delimited files can be read by cboosing the fileformat as csv and setting the delimiter to \t",
         "fileformat": "parquet",
         "comment_groupbyfields": "optional. Applies only to destinations. If specified, the records are group in nested subfolders named field1=value etc",
@@ -48,16 +63,28 @@
         "awsaccesskeyid": "AWS_ACCESS_KEY",
         "comment_awssecretaccesskey": "optional, if EMR runs in same environment as S3. Please replace this expired secret with your own.",
         "awssecretaccesskey": "AWS_SECRET_ACCESS_KEY",
+        "comment_s3_service_endpoint": "Optional. Allows the setting of custom AWS Service Endpoint. This is useful when reading/writing to IBM Object Storage etc.",
+        "s3_service_endpoint": "http://s3.us-south.aws.service.endpoint",
+        "comment_enable_s3_bucket_owner_full_control": "Optional, defaults to true. If set or omitted, this sets the default ACL to BucketOwnerFullControl when writing data to S3. This is useful when doing cross-account S3 writes, and you want to allow the detination S3 bucket's owner to have full access to the written data. Set this to false when reading/writing to IBM Object Storage",
+        "enable_s3_bucket_owner_full_control": true,
         "comment_savemode": "Optional, This should be one of the Append/Overwrite/ErrorIfExists",
         "savemode": "Append",
         "comment_delimiter": "Accepted values are ',','\t' and default value is comma(,)",
         "delimiter": "\t",
         "comment_mergeschema": "Optional, this is to merge different schemas when reading parquet files. the default value for this is false",
         "mergeschema": false,
+        "comment_rowfromjsonstring": "Optional, if we want to convert the josn string into json row before writing into the destination s3 bucket. the default value for this is false",
+        "rowfromjsonstring": "false",
+        "comment_schema": "Optional, applies only to sources. If set, this explicitly sets the schema of the read files. If not set, the schema is inferred if possible",
+        "schema": "`id` BIGINT,`name` STRING",
         "comment_coalescefilecount": "Optional, Specify the number of partitions, which determine the number of files in the destination folder. Applies only to destinations, not sources",
         "coalescefilecount": null,
         "comment_enable_server_side_encryption": "Optional, to access the buckets which have server side encryption enabled with AES 256 to be set true. Default: false",
         "enable_server_side_encryption": "false",
+        "comment_is_kms_enabled": "Optional, this should be set to `true` if the bucket you are reading SSE-KMS enabled",
+        "is_kms_enabled": "false",
+        "comment_kms_key_arn": "Optional, this is a mandatory field if the is_kms_enabled filed is set to true",
+        "kms_key_arn": "arn:aws:kms:<region>:<account-id>:key/<key-id>",
         "comment_post_migrate_command": "This is to execute copy/delete operation after the desired migration to s3",
         "post_migrate_command": {
           "comment_operation": "This field will take options either copy/delete.",
@@ -98,12 +125,18 @@
             "comment_s3region": "optional, the default region is us-east-1 and can use this if the bucket is in different region",
             "s3region": "us-east-1"
           }
-        ]
+        ],
+        "comment_fileprefix": "Optional. If set, this explicitely sets the file prefix. If not, the file prefix is set to s3/s3a",
+        "fileprefix": "s3a://",
+        "comment_schema": "Optional, applies only to sources. If set, this explicitely sets the schema of the read files. If not set, the schema is inferred if possible",
+        "schema": "`id` BIGINT,`name` STRING"
       },
       "comment_sql": "Optional, if Any complex sql queries to be executed on multiple sources then this can be used.",
       "sql": {
         "comment_query": "The sql query to be executed on the sources mentioned.",
-        "query": "any sql query."
+        "query": "any Spark SQL query. This should reference one or more sources of the migration, using the alias of the source(s). i.e. if Spark SQL query is specified, then the alias is a required field for the source(s) the query refers to.",
+        "commment_inputfile": "Optional. If a file in a Spark-accessible filesystem like EMR is specified, DataPull reads the contents of the file and injects the contents of the file into the query attribute above. If both the query and the inputfile attributes are present, the inputfile attribute takes priority",
+        "inputfile": "s3://some_bucket/some_file.sql"
       },
       "source_cassandra": {
         "platform": "cassandra",
@@ -113,6 +146,7 @@
         "cluster": "IP_ADDR_OR_DNS_NAME",
         "keyspace": "YOURKEYSPACE_NAME",
         "table": "TABLE_NAME",
+        "alias": "Mandatory field, when a Spark SQL query is provided in the 'query' field, the alias represent the table name of the data from this source",
         "login": "YOURKEYSPACENAME_APPUSER",
         "comment_password": "optional. Required if Vault integration is not used",
         "password": "PASSWORD",
@@ -158,8 +192,10 @@
         "comment_server": "This element accepts both IPs and CNAMEs e.g. mydbserver.domain.internal. CNAMEs are required if Vault integration is used to fetch the credentials",
         "server": "IP_ADDR_OR_DNS_NAME",
         "database": "DATABASE_NAME",
-        "table": "SCHEMA_NAME.TABLE_NAME",
-        "comment_querys3sqlfile": "optional. SQL Query provided instrea of a source table, in a .sql file uploaded to S3. If this is provided along with the table element, this takes priority",
+        "table": "SCHEMA_NAME.TABLE_NAME OR native SQL query executed by the RDBMS with a format like: (select id from SCHEMA_NAME.TABLE_NAME) A",
+        "comment_alias": "Mandatory field, when a Spark SQL query is provided in the 'query' field, the alias represent the table name of the data from this source",
+        "alias": "A",
+        "comment_querys3sqlfile": "optional. SQL Query provided instead of a source table, in a .sql file uploaded to S3. If this is provided along with the table element, this takes priority",
         "querys3sqlfile": {
           "s3path": "BUCKET_NAME/FOLDER_PATH",
           "comment_awsaccesskeyid": "optional, if EMR runs in same environment as S3. Please replace this expired id with your own.",
@@ -174,29 +210,36 @@
         "port": "1433/3306/1521/5432",
         "comment_jdbcoptions": "Optional, this json object accepts all jdbc configuration options which are related to jdbc datastores",
         "jdbcoptions": {
-          "fetchsize": "72000"
+          "fetchsize": "72000",
+          "comment_logging_level": "Optional, currently this is for Teradata datastore only. accepted values are ERROR/TIMING/INFO/DEBUG. more information can be found here: https://teradata-docs.s3.amazonaws.com/doc/connectivity/jdbc/reference/current/jdbcug_chapter_2.html#URL_LOG",
+          "logging_level": "ERROR"
         },
         "comment_sslenabled": "optional, this option is currently supported for postgres",
         "sslenabled": false,
         "comment_primarykey": " The fields primarykey, lowerbound, upperbound, numPartitions are optional. Setting these fields allows Data Pull to read the rdbms source table/data as parallel partitions. This approach allows smaller table scans but using more connections. Please go through the following link to use these fields : https://spark.apache.org/docs/latest/sql-programming-guide.html#jdbc-to-other-databases",
         "primarykey": "ID",
-        "lowerBound": "1",
+        "comment_inlineexprforjdbc": "this is for executing commands on a any rdbms for resulting in a single value like below. the supported formats are long, int, date. float, string",
+        "lowerBound": "inlineexprforjdbc{{\"sql\": \"select min(id) from table_name\", \"coltype\": \"long\"}",
         "upperBound": "100",
         "numPartitions": "10",
         "comment_iswindowsauthenticated": "Optional, this option is to be used when the users wants to use windows authentication instead of sql authentication",
         "iswindowsauthenticated": "false",
         "comment_domain": "Optional, the domain group of the org you wants to connect when using windows authentication",
-        "domain": "null"
+        "domain": "null",
+        "comment_typeforteradata": "Optional, defaults to DEFAULT. Applies only to Teradata data stores. The value of this attribute is sent to the TYPE parameter in the JDBC connection string. For more information, please refer to https://teradata-docs.s3.amazonaws.com/doc/connectivity/jdbc/reference/current/jdbcug_chapter_2.html#BABJIHBJ",
+        "typeforteradata": "DEFAULT"
       },
       "destination_elastic": {
         "platform": "elastic",
         "clustername": "IP_ADDR_OR_DNS_NAME",
-        "port": "9201",
+        "comment_port": "Optional, defaults to 9200. Port of the ES cluster to connect to.",
+        "port": 9200,
         "index": "Name of Index, equivalent of database",
-        "comment_savemode": "Optional, the default value is upsert and please check here more information on this 'https://www.elastic.co/guide/en/elasticsearch/hadoop/current/configuration.html#_operation': ",
-        "savemode": "upsert",
-        "mappingid": "Optional:Any unique field of your data",
-        "type": "type of index,equivalent of table.",
+        "comment_savemode": "Optional, the default value is index and please check here more information on this 'https://www.elastic.co/guide/en/elasticsearch/hadoop/current/configuration.html#_operation': ",
+        "savemode": "index",
+        "mappingid": "Optional. Any unique field of your data. Required if writing and savemode = upsert",
+        "comment_type": "Optional, deprecated. type of index,equivalent of table. Ref https://www.elastic.co/guide/en/elasticsearch/reference/current/removal-of-types.html",
+        "type": "_doc",
         "version": "Version of your ES",
         "login": "LOGIN_NAME",
         "password": "PASSWORD",
@@ -211,44 +254,152 @@
           {
             "shell": "curl -XDELETE http://IP_ADDR_OR_DNS_NAME:PORT/INDEX_NAME"
           }
-        ]
+        ],
+        "comment_esoptions": "Optional. This enables users to specify configuration options in https://www.elastic.co/guide/en/elasticsearch/hadoop/current/configuration.html. Values specified in this section will override equivalent values in other attributes",
+        "esoptions": {
+          "es.read.field.include": "segment_id,tags",
+          "es.read.field.as.array.include": "tags"
+        }
+      },
+      "source_hive": {
+        "platform": "hive",
+        "comment_query": "Mandatory , the provided query will be executed as sql in Spark Session",
+        "query": "select * from db.table"
+      },
+      "destination_hive": {
+        "platform": "hive",
+        "comment_table": "Mandatory, will be used to specify table being written",
+        "table": "TABLE_NAME",
+        "comment_format": "Mandatory, specify the format of the saved data. Ex. json, csv, parquet",
+        "format": "parquet",
+        "comment_savemode": "Mandatory, specify how data will be saved to the destination table. If partitioned, enter true. Options include append, overwrite, ignore",
+        "savemode": "append",
+        "comment_partitions": "Mandatory, specify whether or not the destination table is partitioned. If partitioned, enter true. If not, enter false",
+        "partitions": false
       },
       "source_kafka": {
         "platform": "kafka",
-        "comment_bootstrapservers": "this is for bootstrap information of the kafka cluster",
-        "bootstrapServers": "KAFKA_BOOTSTRAP_SERVER:9092",
-        "schemaRegistries": "http://KAFKA_SCHEMA_REGISTRY:8081",
+        "comment_bootstrapservers": "comma-separated list of bootstrap servers for the kafka cluster",
+        "bootstrapservers": "KAFKA_BOOTSTRAP_SERVER:9092",
+        "comment_schemaregistries": "comma-separated list of schema registry servers for the kafka cluster. If the valueformat and keyformat are both string, then the schemaregistries attribute is ignored.",
+        "schemaregistries": "http://KAFKA_SCHEMA_REGISTRY:8081",
         "topic": "TOPIC_NAME",
+        "comment_alias": "Mandatory field, when a Spark SQL query is provided in the 'query' field, the alias represent the table name of the data from this source",
+        "alias": "A",
+        "comment_valuesubjectnamingstrategy": "Optional, defaults to TopicNameStrategy. Other options are RecordNameStrategy, TopicRecordNameStrategy. Subject naming strategy to use when getting/setting value's schema subject. Ref https://docs.confluent.io/6.0.0/schema-registry/serdes-develop/index.html#subject-name-strategy",
+        "valuesubjectnamingstrategy": "TopicNameStrategy",
+        "comment_valuesubjectrecordnamespace": "Optional, defaults to empty string. Used only with RecordNameStrategy, TopicRecordNameStrategy. Record Namespace to use. e.g. if topic = test123, valuesubjectnamingstrategy = TopicRecordNameStrategy, valuesubjectrecordnamespace = com.expediagroup.dataplatform, valuesubjectrecordname = PotentialRmdEntry; then subject name for the topic's value  = test123-com.expediagroup.dataplatform.PotentialRmdEntry",
+        "valuesubjectrecordnamespace": "somenamespace",
+        "comment_valuesubjectrecordname": "Optional, defaults to empty string. Used only with RecordNameStrategy, TopicRecordNameStrategy. Record Name to use",
+        "valuesubjectrecordname": "somename",
+        "comment_valueschemaversion": "optional, version of the topic's value schema, if the topic already has a value schema. If this is not specified, the latest version of the valueschema is picked. If there are no value schemas registered for the topic in schema registry, DataPull will register the schema of the valuefield to Schema Registry",
+        "valueschemaversion": "1",
+        "comment_keysubjectnamingstrategy": "Optional, defaults to TopicNameStrategy. Other options are RecordNameStrategy, TopicRecordNameStrategy. Subject naming strategy to use when getting/setting key's schema subject. Ref https://docs.confluent.io/6.0.0/schema-registry/serdes-develop/index.html#subject-name-strategy",
+        "keysubjectnamingstrategy": "TopicNameStrategy",
+        "comment_keysubjectrecordnamespace": "Optional, defaults to empty string. Used only with RecordNameStrategy, TopicRecordNameStrategy. Record Namespace to use. e.g. if topic = test123, keysubjectnamingstrategy = TopicRecordNameStrategy, keysubjectrecordnamespace = com.expediagroup.dataplatform, keysubjectrecordname = PotentialRmdEntry; then subject name for the topic's key  = test123-com.expediagroup.dataplatform.PotentialRmdEntry",
+        "keysubjectrecordnamespace": "somenamespace",
+        "comment_keysubjectrecordname": "Optional, defaults to empty string. Used only with RecordNameStrategy, TopicRecordNameStrategy. Record Name to use",
+        "keysubjectrecordname": "somename",
+        "comment_keyschemaversion": "optional, version of the topic's key schema, if the topic already has a key schema. If this is not specified, the latest version of the key schema is picked. If there are no key schemas registered for the topic in schema registry, DataPull will register the schema of the keyfield to Schema Registry",
+        "keyschemaversion": "1",
+        "comment_headerfield": "Optional. If set, this should be an Array[(String, Array[Byte])] to match Kafka's expectation of an array for headers, ref http://spark.apache.org/docs/latest/structured-streaming-kafka-integration.html#kafka-specific-configurations . Please note this only works for DataPull running on Spark 3.0 or higher.",
+        "headerfield": "some_array_field",
+        "comment_keystorepath": "Optional. local path on spark cluster, to keystore jks file that is needed to authenticate DataPull as a producer client for secure Kafka brokers",
+        "keystorepath": "/local/apath/to/jks/file",
+        "comment_keystorepassword": "Optional. Password for optional keystore jks file",
+        "keystorepassword": "passwrod_for_jks_file",
+        "comment_truststorepath": "Optional. local path on spark cluster, to truststore jks file that is needed to authenticate DataPull as a producer client for secure Kafka brokers",
+        "truststorepath": "/local/apath/to/jks/file",
+        "comment_truststorepassword": "Optional. Password for optional truststore jks file",
+        "truststorepassword": "passwrod_for_jks_file",
+        "comment_keypassword": "Optional. Password for SSL key. Ref https://kafka.apache.org/25/javadoc/org/apache/kafka/common/config/SslConfigs.html#SSL_KEY_PASSWORD_CONFIG",
+        "keypassword": "some_password",
+        "comment_keyformat": "Optional, by default will be avro. Can also be string. If string is chosen, the key field should be of type string. If the field is a complex data type like a struct, you can use the to_json() spark sql command",
+        "keyformat": "avro",
+        "comment_valueformat": "Optional, by default will be avro. Can also be string. If string is chosen, the value field should be of type string. If the field is a complex data type like a struct, you can use the to_json() spark sql command.",
+        "valueformat": "avro",
+        "comment_streamwatermarkfield": "Optional, defaults to timestamp. This attribute is not used unless the streamwatermarkdelay attribute too is specified. This provides the first argument in structured spak streaming's .withWatermark() function. More details at https://spark.apache.org/docs/2.4.6/structured-streaming-programming-guide.html#policy-for-handling-multiple-watermarks",
+        "streamwatermarkfield": "timestamp",
+        "comment_streamwatermakdelay": "Optional. This provides the second argument in structured spak streaming's .withWatermark() function. More details at https://spark.apache.org/docs/2.4.6/structured-streaming-programming-guide.html#policy-for-handling-multiple-watermarks",
+        "streamwatermarkdelay": "1 hour",
+        "comment_kafkaconnectmongodboptions": "Optional. Json Object that allows easier reading of Kafka events produced by MongoDB Kafka source connector https://docs.mongodb.com/kafka-connector/master/kafka-source/",
+        "kafkaconnectmongodboptions": {
+          "comment_documentschema": "Required if kafkaconnectmongodboptions is specified. The schema of the MongoDB collection(s) read by the MongoDB Kafka source connector, and put into the Kafka topic. Providing the schema will make thes field available for querying in spark SQL query as alias.value.fieldname. For example, if the documentschema in the example below is used to read a kafka topic aliased as x, then you can query the _id.$oid field using the query SELECT value._id.`$oid` as oid from x",
+          "documentschema": "_id:struct<`$oid`:string>,businessTypeTags:array<string>,legacyId:string,legacyIdType:string,name:string,status:string,type:string,parentPartnerId:string,jurisdiction:string,managementUnit:string,contacts:array<struct<_id:string,name:string,email:string,address:array<struct<line1:string,line2:string,line3:string,city:string,state:string,county:string,country:string,postalCode:string,type:string>>,phones:array<struct<number:string,type:string>>>>,email:string,website:string,address:array<struct<line1:string,line2:string,line3:string,city:string,state:string,county:string,country:string,postalCode:string,type:string>>,phones:array<struct<number:string,type:string>>,updatedDate:struct<`$date`:bigint>,updatedUser:string,uuid:string"
+        },
+        "comment_sparkoptions": "Optional, this is to enable users to use structured streaming-specific configurations. These options will supercede explicitely named options above. For example, setting topic in sparkoptions will supercede the value of the topic attribute above. All options can be found at the official spark documentation: http://spark.apache.org/docs/latest/structured-streaming-kafka-integration.html#kafka-specific-configurations",
+        "sparkoptions": {
+          "comment_startingOffsets": "Optional, defaults to \"latest\" for streaming, \"earliest\" for batch. You can also use startingOffsetsByTimestamp which takes precendence over this. Ref http://spark.apache.org/docs/latest/structured-streaming-kafka-integration.html#kafka-specific-configurations for more information",
+          "startingOffsets": "\"{\"topic1\":{\"0\":23,\"1\":-2},\"topic2\":{\"0\":-2}}\"",
+          "comment_endingOffsets": "Optional, defaults to \"latest\". You can also use endingOffsetsByTimestamp which takes precendence over this. Ref http://spark.apache.org/docs/latest/structured-streaming-kafka-integration.html#kafka-specific-configurations for more information",
+          "endingOffsets": "\"{\"topic1\":{\"0\":50,\"1\":-1},\"topic2\":{\"0\":-1}}\""
+        },
+        "comment_schemaRegistries": "Deprecated. Please use schemaregistries attribute instead.",
+        "schemaRegistries": "http://KAFKA_SCHEMA_REGISTRY:8081",
+        "comment_offset": "Deprecated. Please use sparkoptions.startingOffsets instead",
         "offset": "earliest",
-        "comment_deserializer": "currenlty we are supporting the below mentioned deserializer but we are happy to support other ones if required.",
+        "comment_deserializer": "Deprecated",
         "deSerializer": "org.apache.kafka.common.serialization.Deserializer",
-        "comment_s3location": "we stage s3 data in a s3 location as we poll the topic many times. giving a location in the same env as the kafka topic is required and we append two UUID's(we have migration id and job id for each run, so we will appending these two UUID's at the end of the s3location to the user input)",
+        "comment_s3location": "Deprecated. we stage s3 data in a s3 location as we poll the topic many times. giving a location in the same env as the kafka topic is required and we append two UUID's(we have migration id and job id for each run, so we will appending these two UUID's at the end of the s3location to the user input)",
         "s3location": "s3a://BUCKET_NAME/FOLDER_PATH",
-        "comment_groupid": "Optional, using this option will read the data where you are left off in the previous run with the same group id",
+        "comment_groupid": "Deprecated. Optional, using this option will read the data where you are left off in the previous run with the same group id",
         "groupid": "KAFKA_GROUPID",
-        "comment_requiredonlyvalue": "Optional, by default we will read both the key and value objects. if you want to get the only value then keep this option to true",
+        "comment_requiredonlyvalue": "Deprecated. Optional, by default we will read both the key and value objects. if you want to get the only value then keep this option to true",
         "requiredonlyvalue": "false",
-        "comment_": "this is the name of the payload column for the topic. for eg, value, body etc. default value for this option is `body` and this option only will have an effect when you have the option `requiredonlyvalue` to true",
+        "comment_payloadcolumnname": "Deprecated. this is the name of the payload column for the topic. for eg, value, body etc. default value for this option is `body` and this option only will have an effect when you have the option `requiredonlyvalue` to true",
         "payloadcolumnname": "body",
-        "Comment_keyField": "this is the key to be set for the message from dataset",
+        "Comment_keyField": "Deprecated",
         "keyField": "some_keyfield",
-        "comment_keyFormat": "Optional, you can set the serializer type for the key between string and avro, Default: string",
-        "keyFormat": "string",
-        "comment_valuefield": "Optional, if the value field has to be derived from a column from the dataset else whole row will be treated as the payload",
-        "valuefield": "null",
-        "comment_headerfield": "Optional, if you want to set header field from a column in the dataset else we add timestamp column as headers field. Please note that it should be of the struct type if it's being build in sql",
-        "headerfield": "null"
-      },
-      "destination": {
-        "platform": "kafka",
-        "comment_bootstrapservers": "this is for bootstrap information of the kafka cluster",
-        "bootstrapServers": "KAFKA_BOOTSTRAP_SERVER:9092",
-        "schemaRegistries": "http://KAFKA_SCHEMA_REGISTRY:8081",
-        "topic": "TOPIC_NAME",
-        "comment_keyField": "required, field in the dataset that should be used as the kafka topic's key field",
-        "keyField": "some_keyfield",
-        "comment_keyFormat": "Optional, by default will be string. If set to avro, the key field will be converted to avro and the schema will be registered in schema registry",
+        "Comment_valuefield": "Deprecated",
+        "valuefield": "some_value",
+        "comment_keyFormat": "Depcrecated, use keyformat attributed instead. Optional, you can set the serializer type for the key between string and avro, Default: string",
         "keyFormat": "string"
+      },
+      "destination_kafka": {
+        "platform": "kafka",
+        "comment_bootstrapservers": "comma-separated list of bootstrap servers for the kafka cluster",
+        "bootstrapservers": "KAFKA_BOOTSTRAP_SERVER:9092",
+        "comment_schemaregistries": "comma-separated list of schema registry servers for the kafka cluster",
+        "schemaregistries": "http://KAFKA_SCHEMA_REGISTRY:8081",
+        "topic": "TOPIC_NAME",
+        "comment_valuefield": "Optional, defaulted to 'value'. Field in the dataset that should be used as the kafka topics value field. If not specified, DataPull will use the field named value in the resultset",
+        "valuefield": "value",
+        "comment_valuesubjectnamingstrategy": "Optional, defaults to TopicNameStrategy. Other options are RecordNameStrategy, TopicRecordNameStrategy. Subject naming strategy to use when getting/setting value's schema subject. Ref https://docs.confluent.io/6.0.0/schema-registry/serdes-develop/index.html#subject-name-strategy",
+        "valuesubjectnamingstrategy": "TopicNameStrategy",
+        "comment_valuesubjectrecordnamespace": "Optional, defaults to empty string. Used only with RecordNameStrategy, TopicRecordNameStrategy. Record Namespace to use. e.g. if topic = test123, valuesubjectnamingstrategy = TopicRecordNameStrategy, valuesubjectrecordnamespace = com.expediagroup.dataplatform, valuesubjectrecordname = PotentialRmdEntry; then subject name for the topic's value  = test123-com.expediagroup.dataplatform.PotentialRmdEntry",
+        "valuesubjectrecordnamespace": "somenamespace",
+        "comment_valuesubjectrecordname": "Optional, defaults to empty string. Used only with RecordNameStrategy, TopicRecordNameStrategy. Record Name to use",
+        "valuesubjectrecordname": "somename",
+        "comment_valueschemaversion": "optional, version of the topic's value schema, if the topic already has a value schema. If this is not specified, the latest version of the valueschema is picked. If there are no value schemas registered for the topic in schema registry, DataPull will register the schema of the valuefield to Schema Registry",
+        "valueschemaversion": "1",
+        "comment_keyfield": "optional, field in the dataset that should be used as the kafka topic's key field. If not set , the kafka topic key will not be set",
+        "keyfield": "some_keyfield",
+        "comment_keysubjectnamingstrategy": "Optional, defaults to TopicNameStrategy. Other options are RecordNameStrategy, TopicRecordNameStrategy. Subject naming strategy to use when getting/setting key's schema subject. Ref https://docs.confluent.io/6.0.0/schema-registry/serdes-develop/index.html#subject-name-strategy",
+        "keysubjectnamingstrategy": "TopicNameStrategy",
+        "comment_keysubjectrecordnamespace": "Optional, defaults to empty string. Used only with RecordNameStrategy, TopicRecordNameStrategy. Record Namespace to use. e.g. if topic = test123, keysubjectnamingstrategy = TopicRecordNameStrategy, keysubjectrecordnamespace = com.expediagroup.dataplatform, keysubjectrecordname = PotentialRmdEntry; then subject name for the topic's key  = test123-com.expediagroup.dataplatform.PotentialRmdEntry",
+        "keysubjectrecordnamespace": "somenamespace",
+        "comment_keysubjectrecordname": "Optional, defaults to empty string. Used only with RecordNameStrategy, TopicRecordNameStrategy. Record Name to use",
+        "keysubjectrecordname": "somename",
+        "comment_keyschemaversion": "optional, version of the topic's key schema, if the topic already has a key schema. If this is not specified, the latest version of the key schema is picked. If there are no key schemas registered for the topic in schema registry, DataPull will register the schema of the keyfield to Schema Registry",
+        "keyschemaversion": "1",
+        "comment_headerfield": "Optional. If set, this should be an Array[(String, Array[Byte])] to match Kafka's expectation of an array for headers, ref http://spark.apache.org/docs/latest/structured-streaming-kafka-integration.html#kafka-specific-configurations . Please note this only works for DataPull running on Spark 3.0 or higher.",
+        "headerfield": "some_array_field",
+        "comment_keystorepath": "Optional. local path on spark cluster, to keystore jks file that is needed to authenticate DataPull as a producer client for secure Kafka brokers",
+        "keystorepath": "/local/apath/to/jks/file",
+        "comment_keystorepassword": "Optional. Password for optional keystore jks file",
+        "keystorepassword": "passwrod_for_jks_file",
+        "comment_truststorepath": "Optional. local path on spark cluster, to truststore jks file that is needed to authenticate DataPull as a producer client for secure Kafka brokers",
+        "truststorepath": "/local/apath/to/jks/file",
+        "comment_truststorepassword": "Optional. Password for optional truststore jks file",
+        "truststorepassword": "passwrod_for_jks_file",
+        "comment_keypassword": "Optional. Password for SSL key. Ref https://kafka.apache.org/25/javadoc/org/apache/kafka/common/config/SslConfigs.html#SSL_KEY_PASSWORD_CONFIG",
+        "keypassword": "some_password",
+        "comment_sparkoptions": "Optional, this is to enable users to use structured streaming-specific configurations. These options will supercede explicitely named options above. For example, setting topic in sparkoptions will supercede the value of the topic attribute above. All options can be found at the official spark documentation: http://spark.apache.org/docs/latest/structured-streaming-kafka-integration.html#kafka-specific-configurations",
+        "sparkoptions": {},
+        "comment_keyformat": "Optional, by default will be avro. Can also be string. If string is chosen, the key field should be of type string. If the field is a complex data type like a struct, you can use the to_json() spark sql command",
+        "keyformat": "avro",
+        "comment_valueformat": "Optional, by default will be avro. Can also be string. If string is chosen, the value field should be of type string. If the field is a complex data type like a struct, you can use the to_json() spark sql command",
+        "valueformat": "avro"
       },
       "source_influxdb": {
         "platform": "influxdb",
@@ -256,6 +407,8 @@
         "awsenv": "dev",
         "clustername": "localhost",
         "database": "mydb",
+        "comment_alias": "Mandatory field, when a Spark SQL query is provided in the 'query' field, the alias represent the table name of the data from this source",
+        "alias": "A",
         "measurementname": "cpu",
         "login": "login",
         "password": "password",
@@ -299,6 +452,8 @@
         "replicaset": "REPLICASET_NAME",
         "database": "DATABASE_NAME",
         "collection": "COLLECTION_NAME",
+        "comment_alias": "Mandatory field, when a Spark SQL query is provided in the 'query' field, the alias represent the table name of the data from this source",
+        "alias": "A",
         "login": "LOGIN_NAME",
         "comment_password": "optional. Required if Vault integration is not used",
         "password": "PASSWORD",
@@ -314,9 +469,9 @@
           "ordered": false,
           "readPreference.name": "Primary"
         },
-        "cpmment_pre_migrate_command": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
+        "comment_pre_migrate_command": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
         "pre_migrate_command": "{ delete: \"datapull_test\",deletes: [ { q: { user: \"abc123\" }, limit: 1 } ] }",
-        "cpmment_post_migrate_commands": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
+        "comment_post_migrate_commands": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
         "post_migrate_commands": [
           {
             "query": "{ delete: \"datapull_test\",deletes: [ { q: { user: \"abc123\" }, limit: 1 } ] }"
@@ -350,15 +505,15 @@
           "ordered": false,
           "readPreference.name": "Primary"
         },
-        "comment_secret_store": "Optional, this should be used if the secret has to be retrieved from secretmanager. Accepatble value is aws_secrets_manager",
-        "secret_store": "aws_secrets_manager",
-        "comment_secret_name": "if the aws_secrets_manager as selected as secret_store then this field should be used to provide the secret name",
+        "comment_secretstore": "Optional, deprecated, defaults to null. Please use the inlinesecrets{{}} capablity instead. secretstore can be used if a secret has to be retrieved from AWS Secrets Manager. This retrieved secret is injected into the password attribute's value. Acceptable value for secretstore is aws_secrets_manager",
+        "secretstore": null,
+        "comment_secret_name": "Deprecated. If the aws_secrets_manager as selected as secretstore then this attribute's value is used to provide the secret name. If the secret_key_name attribute is not set, then the full value of the AWS Secrets Manager secret with name secret_name is injected into the password attribute. The secret stored in Secrets Manager corresponding to a secret name, has a max size of 10 kb.",
         "secret_name": "AWS_SECRET_NAME",
-        "comment_secret_key_name": "Optional. The secret stored in Secrets Manager corresponding to a secret name, has a max size of 10 kb. If the secret is a JSON string (which is usually the case) or a binary map, then the secret_key_name specifies which JSON attribute/map key to use as the secret. If the secret_key_name is not specified then the whole string is used as the secret.",
+        "comment_secret_key_name": "Optional, deprecated. Used only if the aws_secrets_manager as selected as secretstore attribute's value. If the secret is a JSON string (which is usually the case) or a binary map, then the secret_key_name specifies which JSON attribute/map key to use as the secret. If the secret_key_name is not specified then the whole string is used as the secret.",
         "secret_key_name": null,
-        "cpmment_pre_migrate_command": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
+        "comment_pre_migrate_command": "Optional, this feature will allow users to run pre migrate command for any operations on the collections",
         "pre_migrate_command": "{ delete: \"datapull_test\",deletes: [ { q: { user: \"abc123\" }, limit: 1 } ] }",
-        "cpmment_post_migrate_commands": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
+        "comment_post_migrate_commands": "Optional, this feauture will allow users to run pre migrate command for any operations on the collections",
         "post_migrate_commands": [
           {
             "query": "{ delete: \"datapull_test\",deletes: [ { q: { user: \"abc123\" }, limit: 1 } ] }"
@@ -374,38 +529,6 @@
         "awsaccesskeyid": "AWS_ACCESS_KEY",
         "comment_awssecretaccesskey": "Optional. If not provided the application will use service link role for accessing cloudwatch",
         "awssecretaccesskey": "AWS_SECRET_ACCESS_KEY"
-      },
-      "destination_neo4j": {
-        "platform": "neo4j",
-        "cluster": "IP_ADDR_OR_DNS_NAME",
-        "comment_node1": "Required. Information about the first (of possible two) classes of nodes to be upserted",
-        "node1": {
-          "label": "foodtype",
-          "property_key": "foodtypeid",
-          "properties_nonkey": [
-            "foodtype"
-          ],
-          "comment_createormerge": "Optional, defaults to MERGE. Can either be CREATE or MERGE, and denotes whether Neo4j does a CREATE (insert, possibly leading to duplicates, but very fast) or a MERGE (upsert, no duplicates but slower) operation",
-          "createormerge": "MERGE",
-          "comment_createnodekeyconstraint": "Optional, defaults to true. If true, Data Pull creates a node key constraint for all the key properties of the node",
-          "createnodekeyconstraint": true
-        },
-        "comment_node2": "Optional. Information about the second (of possible two) classes of nodes to be upserted.",
-        "node2": {
-          "label": "food",
-          "property_key": "foodid",
-          "properties_nonkey": [
-            "food"
-          ]
-        },
-        "comment_relation": "Optional. Attributes of the directed relation from node1 to node2. If this is ommitted, node1 and node2 will still be upserted",
-        "relation": {
-          "label": "relatedto",
-          "comment_createormerge": "Optional, defaults to MERGE. Can either be CREATE or MERGE, and denotes whether Neo4j does a CREATE (insert, possibly leading to duplicates, but very fast) or a MERGE (upsert, no duplicates but slower) operation",
-          "createormerge": "MERGE"
-        },
-        "login": "appuser",
-        "password": "appuser"
       },
       "destination_snowflake": {
         "platform": "snowflake",
@@ -437,6 +560,21 @@
         "jksfilepath": "s3://<S3 bucket and folder path>/<PEM file name>",
         "comment_fileformat": "Supported formats are parquet,json,csv,orc,avro. Tab-delimited files can be read by cboosing the fileformat as csv and setting the delimiter to \t",
         "fileformat": "json"
+      },
+      "destination_console": {
+        "platform": "console",
+        "comment_outputmode": "Optional, defaults to 'append'. Applies to streaming data only. Refer to \"Console Sink\" on https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html for all options",
+        "outputmode": "append",
+        "comment_numrows": "Optional, defaults to 20. Number of rows of the dataframe to show",
+        "numrows": 20,
+        "comment_truncate": "Optional, defaults to true. Controls whether to truncate long dataframe data",
+        "truncate": true
+      },
+      "comment_properties": "this to set additional configs for spark session config i.e. spark.conf",
+      "properties": {
+        "spark.sql.parquet.writeLegacyFormat": "true",
+        "spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version": "2",
+        "spark.sql.parquet.fs.optimized.committer.optimization-enabled": "true"
       }
     }
   ],
@@ -451,8 +589,8 @@
     "portfolio": "my_portfolio",
     "comment_product": "The product information for which this is being done",
     "product": "my_product",
-    "comment_ec2instanceprofile": "The role with whioch the emr cluster(ec2-instances) has to be spun up so that they can access vault.",
-    "ec2instanceprofile": "my-loader",
+    "comment_ec2instanceprofile": "For DataPulls running on EMR, the AWS Role with which the EC2 nodes of the EMR cluster have to be spun up so that they can access Vault.",
+    "ec2instanceprofile": "emr_ec2_datapull_role",
     "comment_componentinfo": "Dominion enforced UUID tag. ",
     "ComponentInfo": "00000000-0000-0000-0000-000000000000",
     "comment_cronexpression": "optional,this element will be used for scheduling the job and it will be defaulted for single run",
@@ -465,7 +603,70 @@
     "NodeCount": 6,
     "comment_sparksubmitparams": "optional, this option will give the ability to add the users to add the spark submit options for your use case",
     "sparksubmitparams": "--conf spark.driver.memory=10g --deploy-mode cluster --class DataMigrationFramework s3://BUCKET_NAME/FOLDER_PATH/DataMigrationFramework-1.0-SNAPSHOT-jar-with-dependencies_test.jar",
-    "comment_emr_service_role": "optional, thsi option should be used set the emr service role. Default: emr_datapull_role",
-    "emr_service_role": "emr_datapull_role"
-  }
+    "comment_emr_service_role": "optional, this option should be used set the emr service role. Default: emr_datapull_role",
+    "emr_service_role": "emr_datapull_role",
+    "comment_forcerestart": "optional, this option should be used when running cluster will be terminated and new cluster is created. Default: false",
+    "forcerestart": false,
+    "comment_bootstrapactionstring": "Optional, it will add any additional commands which needs to be executed on the all the nodes as part of the bootstrap action",
+    "bootstrapactionstring": "sudo yum install openssl11-libs -y",
+    "comment_subnet_id": "Optional, the EMR cluster will be spun up in the default subnet of the environment if this is not provided by the user",
+    "subnet_id": "application_subnet_1",
+    "Comment_ec2_key_name": "Optional, This should be added to the cluster section of the JSON if we have to ssh into the master",
+    "ec2_key_name": "EC2 key Pair",
+    "comment_hive_properties": "Optional, the EMR cluster will be spun up with user provided hive-site classification properties, see for more configuration properties: https://cwiki.apache.org/confluence/display/hive/configuration+properties",
+    "hive_properties": {
+      "hive.security.authorization.createtable.role.grants": "public:select",
+      "hive.metastore.client_socket.timeout": "1800s",
+      "hive.security.authorization.manager": "",
+      "hive.exec.max.dynamic.partitions": "100000",
+      "hive.exec.max.dynamic.partitions.pernode": "10000",
+      "hive.exec.compress.output": "true",
+      "hive.optimize.sort.dynamic.partition": "false",
+      "hive.metastore.filter.hook": ""
+    },
+    "comment_hdfs_properties": "Optional, the EMR cluster will be spun up with user provided hdfs-site classification properties",
+    "hdfs_properties": {
+      "dfs.nameservices": "prodhdp-ha",
+      "dfs.ha.namenodes.prodhdp-ha": "nn1,nn2",
+      "dfs.namenode.rpc-address.prodhdp-ha.nn1": "namenode01:8020",
+      "dfs.namenode.rpc-address.prodhdp-ha.nn2": "namenode02:8020",
+      "dfs.namenode.http-address.prodhdp-ha.nn1": "namenode01:50070",
+      "dfs.namenode.http-address.prodhdp-ha.nn2": "namenode02:50070",
+      "dfs.namenode.heartbeat.recheck-interval": "3 seconds",
+      "dfs.replication": "3",
+      "dfs.namenode.checkpoint.dir": "C:/hadoop/data/namenode",
+      "dfs.datanode.data.dir": "C:/hadoop/data/datanode",
+      "dfs.stream-buffer-size": "4096",
+      "dfs.namenode.checkpoint.max-retries": "3"
+    },
+    "comment_spark_hive_properties": "Optional, the EMR cluster will be spun up with user provided spark-hive-site classification properties",
+    "spark_hive_properties": {
+      "hive.metastore.uris": "thrift://your.apiary.address:9083"
+    },
+    "comment_emr_release_version": "Optional, this is to specify any custom EMR version for a specific use case  and default one is 5.31.0",
+    "emr_release_version": "emr-5.31.0",
+    "comment_emr_security_configuration": "Optional, this is to spin up emr cluster with any security configuration with specific permissions",
+    "emr_security_configuration": "",
+    "comment_spark_submit_arguments": "Optional, This is to override the default arguments for the spark submit command and this will remove the default arguments of teh datapull",
+    "comment_tags": "Optional, this is to add any additional tags for the emr cluster",
+    "comment_core_site_properties": "Optional, if the user wants to set some core-site.xml settings while spinning up the emr cluster",
+    "core_site_properties": {
+      "fs.s3.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
+    },
+    "tags": {
+      "Creator": "email@domain.com",
+      "costCenter": "012535"
+    },
+    "spark_submit_arguments": [
+      "start_date",
+      "test"
+    ],
+    "comment_bootstrap_action_file_path": "Optional, this is to add bootstrap action on emr cluster from a custom shell file path",
+    "bootstrap_action_file_path": "s3://<S3_BUCKET_NAME/PATH_TO_THE_FILE"
+  },
+  "comment_bootstrap_action_arguments": "Optional, this can be used to pass job specific arguments to the custom bootstrap script file option `bootstrap_action_file_path`",
+  "bootstrap_action_arguments": [
+    "name_of_the_cluster",
+    "env"
+  ]
 }
